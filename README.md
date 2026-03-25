@@ -1,15 +1,15 @@
 <p align="center">
-  <h1 align="center">harness0</h1>
-  <p align="center">
-    <strong>Agent reliability through harness engineering.</strong>
-  </p>
-  <p align="center">
-    <a href="#design-preview">Design Preview</a> &middot;
-    <a href="#the-5-layer-harness-model">5-Layer Model</a> &middot;
-    <a href="#planned-framework-integrations">Integrations</a> &middot;
-    <a href="docs/architecture.md">Architecture</a> &middot;
-    <a href="#contributing">Contributing</a>
-  </p>
+  <img src="assets/harness0-banner.png" alt="harness0 — Layer 0 of Agent Reliability" width="100%">
+</p>
+<p align="center">
+  <strong>Agent reliability through harness engineering.</strong>
+</p>
+<p align="center">
+  <a href="#design-preview">Design Preview</a> &middot;
+  <a href="#the-5-layer-harness-model">5-Layer Model</a> &middot;
+  <a href="#planned-framework-integrations">Integrations</a> &middot;
+  <a href="docs/architecture.md">Architecture</a> &middot;
+  <a href="#contributing">Contributing</a>
 </p>
 
 > **Status: Pre-Alpha — Under Active Development**
