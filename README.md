@@ -277,7 +277,7 @@ harness0 is built on the **Harness Engineering** philosophy:
 
 The same model in different harness environments can produce dramatically different results. Industry practitioners have reported significant agent performance improvements by modifying only the harness while keeping the model fixed.
 
-For a deep dive into the concept, see [Harness Engineering: Agent Engineering Explained](https://stack.mcell.top/blog/2026/harness-engineering-agent-engineering-explained) (Chinese).
+The concept was first introduced by Ryan Lopopolo at OpenAI in February 2026. See the original post: [Harness Engineering: Leveraging Codex in an Agent-First World](https://openai.com/index/harness-engineering/).
 
 ## Project Structure
 
