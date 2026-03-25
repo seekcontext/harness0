@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "harness0"
-version = "0.0.1"
+version = "0.0.2"
 description = "Layer 0 of agent reliability — the framework-agnostic harness that makes any AI agent stable."
 readme = "README.md"
 license = "MIT"
