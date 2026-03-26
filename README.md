@@ -95,7 +95,7 @@ async def main():
 asyncio.run(main())
 ```
 
-> **v0.0.4** — L1–L5 and `HarnessEngine` are implemented and functional. Framework integrations are planned. See [TODO.md](https://github.com/seekcontext/harness0/blob/main/TODO.md).
+> **v0.0.5** — L1–L5 and `HarnessEngine` are implemented and functional. Framework integrations are planned. See [TODO.md](https://github.com/seekcontext/harness0/blob/main/TODO.md).
 
 <details>
 <summary><b>With <code>harness.yaml</code> — declarative configuration</b></summary>

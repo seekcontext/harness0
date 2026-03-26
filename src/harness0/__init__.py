@@ -13,7 +13,7 @@ Five composable layers, independently importable:
     from harness0.entropy import EntropyManager           # L5 only
 """
 
-__version__ = "0.0.4"
+__version__ = "0.0.5"
 
 from harness0.context import (
     CallableSource,
