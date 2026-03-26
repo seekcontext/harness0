@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="assets/harness0-banner.png" alt="harness0 — Layer 0 of Agent Reliability" width="100%">
+  <img src="https://raw.githubusercontent.com/seekcontext/harness0/main/assets/harness0-banner.png" alt="harness0 — Layer 0 of Agent Reliability" width="100%">
 </p>
 
 <p align="center">
   <a href="https://pypi.org/project/harness0/"><img src="https://img.shields.io/pypi/v/harness0?color=blue" alt="PyPI version"></a>
   <a href="https://pypi.org/project/harness0/"><img src="https://img.shields.io/pypi/pyversions/harness0" alt="Python 3.11+"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
+  <a href="https://github.com/seekcontext/harness0/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
 </p>
 
 <p align="center">
@@ -16,8 +16,8 @@
   <a href="#quick-start">Quick Start</a> &middot;
   <a href="#the-5-layer-harness-model">5-Layer Model</a> &middot;
   <a href="#use-individual-layers">Individual Layers</a> &middot;
-  <a href="docs/USER_MANUAL.md">User Manual</a> &middot;
-  <a href="docs/architecture.md">Architecture</a>
+  <a href="https://github.com/seekcontext/harness0/blob/main/docs/USER_MANUAL.md">User Manual</a> &middot;
+  <a href="https://github.com/seekcontext/harness0/blob/main/docs/architecture.md">Architecture</a>
 </p>
 
 ---
@@ -95,7 +95,7 @@ async def main():
 asyncio.run(main())
 ```
 
-> **v0.0.3** — L1–L5 and `HarnessEngine` are implemented and functional. Framework integrations are planned. See [TODO.md](TODO.md).
+> **v0.0.4** — L1–L5 and `HarnessEngine` are implemented and functional. Framework integrations are planned. See [TODO.md](https://github.com/seekcontext/harness0/blob/main/TODO.md).
 
 <details>
 <summary><b>With <code>harness.yaml</code> — declarative configuration</b></summary>
@@ -259,7 +259,7 @@ L3 SecurityGuard blocks "rm -rf /"
         → L5 EntropyManager garbage-collects stale signals later
 ```
 
-→ **[Full API reference → User Manual](docs/USER_MANUAL.md)**
+→ **[Full API reference → User Manual](https://github.com/seekcontext/harness0/blob/main/docs/USER_MANUAL.md)**
 
 ---
 
@@ -277,13 +277,13 @@ from harness0.entropy import EntropyManager           # L5 — context quality m
 
 Use just L3 for security, just L1 for prompt assembly, or all 5 together. Each layer has zero dependencies on the others.
 
-→ **[Individual layer usage examples → User Manual §11](docs/USER_MANUAL.md#11-using-individual-layers)**
+→ **[Individual layer usage examples → User Manual §11](https://github.com/seekcontext/harness0/blob/main/docs/USER_MANUAL.md#11-using-individual-layers)**
 
 ---
 
 ## How It Compares
 
-> Based on publicly available documentation as of March 2026. See [competitive-analysis.md](docs/competitive-analysis.md) for methodology.
+> Based on publicly available documentation as of March 2026. See [competitive-analysis.md](https://github.com/seekcontext/harness0/blob/main/docs/competitive-analysis.md) for methodology.
 
 | Capability | LangChain | OpenAI SDK | MS AGT | **harness0** |
 |---|---|---|---|---|
@@ -313,7 +313,7 @@ harness0 works **with** your existing framework. Adapters are on the roadmap:
 | PydanticAI | `pip install harness0[pydantic-ai]` | Dependency injection |
 | CrewAI | `pip install harness0[crewai]` | `@harness_tool` decorator |
 
-→ **[Integration architecture → Architecture docs](docs/architecture.md#integration-architecture)**
+→ **[Integration architecture → Architecture docs](https://github.com/seekcontext/harness0/blob/main/docs/architecture.md#integration-architecture)**
 
 ---
 
@@ -337,7 +337,7 @@ Three lessons from [OpenAI's harness engineering](https://openai.com/index/harne
 
 ## Contributing
 
-Contributions welcome. See [TODO.md](TODO.md) for the full roadmap.
+Contributions welcome. See [TODO.md](https://github.com/seekcontext/harness0/blob/main/TODO.md) for the full roadmap.
 
 **Priority areas**: test suite · LLM provider layer · built-in tool plugins · framework adapters · entropy detection strategies
 
@@ -348,9 +348,9 @@ MIT
 ---
 
 <p align="center">
-  <a href="docs/USER_MANUAL.md">User Manual</a> &middot;
-  <a href="docs/architecture.md">Architecture</a> &middot;
-  <a href="docs/competitive-analysis.md">Competitive Analysis</a> &middot;
-  <a href="docs/project-vision.md">Vision</a> &middot;
-  <a href="TODO.md">Roadmap</a>
+  <a href="https://github.com/seekcontext/harness0/blob/main/docs/USER_MANUAL.md">User Manual</a> &middot;
+  <a href="https://github.com/seekcontext/harness0/blob/main/docs/architecture.md">Architecture</a> &middot;
+  <a href="https://github.com/seekcontext/harness0/blob/main/docs/competitive-analysis.md">Competitive Analysis</a> &middot;
+  <a href="https://github.com/seekcontext/harness0/blob/main/docs/project-vision.md">Vision</a> &middot;
+  <a href="https://github.com/seekcontext/harness0/blob/main/TODO.md">Roadmap</a>
 </p>
