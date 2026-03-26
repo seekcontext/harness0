@@ -1,6 +1,7 @@
 # Harness0 — User Manual
 
-> **Status**: This manual describes the **planned** API and behavior of harness0. The project is under active development. APIs may change before the first stable release.
+> **Status**: v0.0.3 — Core layers (L1–L5) and `HarnessEngine` facade are implemented and functional.
+> Sections marked **[PLANNED]** describe future capabilities not yet implemented.
 
 ---
 
@@ -17,8 +18,8 @@
 - [9. L5: Entropy Management](#9-l5-entropy-management)
 - [10. The Agent Loop](#10-the-agent-loop)
 - [11. Using Individual Layers](#11-using-individual-layers)
-- [12. Framework Integrations](#12-framework-integrations)
-- [13. Built-in Tool Plugins](#13-built-in-tool-plugins)
+- [12. Framework Integrations](#12-framework-integrations) [PLANNED]
+- [13. Built-in Tool Plugins](#13-built-in-tool-plugins) [PLANNED]
 - [14. LLM Providers](#14-llm-providers)
 - [15. Advanced Topics](#15-advanced-topics)
 - [16. Troubleshooting](#16-troubleshooting)
@@ -33,12 +34,13 @@
 pip install harness0
 ```
 
-This installs the core library with minimal dependencies: `pydantic`, `httpx`, `pyyaml`, `tiktoken`.
+This installs the core library with all required dependencies:
+`pydantic>=2.0`, `pyyaml>=6.0`, `tiktoken>=0.7`, `httpx>=0.27`, `aiofiles>=24.0`.
 
-### With framework integration adapters
+### With framework integration adapters [PLANNED]
 
 ```bash
-pip install harness0[langchain]      # LangChain Deep Agents middleware
+pip install harness0[langchain]      # LangChain middleware
 pip install harness0[openai]         # OpenAI Agents SDK guardrails
 pip install harness0[pydantic-ai]    # PydanticAI dependency injection
 pip install harness0[crewai]         # CrewAI tool wrappers
@@ -47,7 +49,7 @@ pip install harness0[crewai]         # CrewAI tool wrappers
 ### From source (development)
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/harness0.git
+git clone https://github.com/seekcontext/harness0.git
 cd harness0
 pip install -e ".[dev]"
 ```
@@ -101,9 +103,45 @@ All behavior is declared in a `harness.yaml` file. No runtime behavior is hidden
 
 ## 3. Quick Start
 
-### 3.1 Minimal example
+### 3.1 Minimal example (no config file)
 
-Create two files:
+```python
+import asyncio
+from harness0 import HarnessEngine, RiskLevel
+
+# Zero-config engine with sensible defaults
+engine = HarnessEngine.default()
+
+@engine.tool(risk_level=RiskLevel.READ)
+async def read_file(path: str) -> str:
+    """Read a file and return its contents."""
+    with open(path) as f:
+        return f.read()
+
+@engine.tool(risk_level=RiskLevel.WRITE)
+async def write_file(path: str, content: str) -> str:
+    """Write content to a file."""
+    with open(path, "w") as f:
+        f.write(content)
+    return f"Written {len(content)} chars to {path}"
+
+@engine.tool(risk_level=RiskLevel.EXECUTE, requires_approval=True)
+async def run_command(command: str) -> str:
+    """Execute a shell command."""
+    import subprocess
+    result = subprocess.run(command, shell=True, capture_output=True, text=True)
+    return result.stdout or result.stderr
+
+async def main():
+    from openai import AsyncOpenAI
+    client = AsyncOpenAI()  # reads OPENAI_API_KEY from environment
+    result = await engine.run("Create a Python script that prints hello world", llm_client=client)
+    print(result.output)
+
+asyncio.run(main())
+```
+
+### 3.2 With YAML configuration
 
 **harness.yaml**:
 
@@ -117,271 +155,260 @@ context:
     - name: base
       source: prompts/base.md
       priority: 0
+      disclosure_level: index
+    - name: security-guide
+      source: prompts/security.md
+      priority: 5
+      disclosure_level: detail
+      keywords: ["security", "permission", "auth"]
   total_token_budget: 8000
+
+tools:
+  default_risk: read
+  max_output_tokens: 5000
+  audit_enabled: true
 
 security:
   sandbox_enabled: true
-  blocked_commands: ["rm -rf", "sudo"]
+  blocked_commands: ["rm -rf", "sudo", "> /dev/sda"]
   approval_mode: risky_only
+  default_timeout: 30
 
 feedback:
   inject_hints: true
+  signal_format: xml
+  max_signals_per_turn: 10
 
 entropy:
   compression_threshold: 6000
   decay_check_interval: 10
+  detect_conflicts: true
+  staleness_threshold_hours: 24
+  gardener_enabled: true
+  gardener_interval_turns: 5
+  golden_rules:
+    - id: no_stale_layers
+      description: "All FileSource layers must be fresher than staleness_threshold_hours"
+      severity: warning
+    - id: no_duplicate_tools
+      description: "No two tools may share the same description"
+      severity: error
+
+max_iterations: 50
+checkpoint_enabled: true
 ```
 
 **main.py**:
 
 ```python
 import asyncio
-from harness0 import HarnessEngine
+from openai import AsyncOpenAI
+from harness0 import HarnessEngine, RiskLevel
 
 engine = HarnessEngine.from_config("harness.yaml")
 
-@engine.tool(risk_level="read")
+@engine.tool(risk_level=RiskLevel.READ)
 async def read_file(path: str) -> str:
     """Read a file and return its contents."""
     with open(path) as f:
         return f.read()
 
-@engine.tool(risk_level="write")
-async def write_file(path: str, content: str) -> str:
-    """Write content to a file."""
-    with open(path, "w") as f:
-        f.write(content)
-    return f"Written {len(content)} chars to {path}"
-
-@engine.tool(risk_level="execute", requires_approval=True)
-async def run_command(command: str) -> str:
-    """Execute a shell command."""
-    ...
-
 async def main():
-    result = await engine.run("Create a Python script that prints hello world")
+    client = AsyncOpenAI()
+    result = await engine.run("Summarise README.md", llm_client=client)
     print(result.output)
+    print(f"Completed in {result.turn_count} turns, status: {result.status}")
 
 asyncio.run(main())
 ```
 
-**prompts/base.md**:
+### 3.3 What happens at runtime
 
-```markdown
-You are a coding assistant. You help users by writing and modifying code.
-
-Rules:
-- Always read existing files before modifying them.
-- Write clean, well-structured code.
-- Prefer small, focused changes.
-```
-
-Run:
-
-```bash
-export OPENAI_API_KEY="sk-..."
-python main.py
-```
-
-### 3.2 What happens at runtime
-
-When you call `engine.run("Create a Python script...")`, the following sequence executes:
+When you call `engine.run(task, llm_client=client)`, the following sequence executes each turn:
 
 ```
-1. L1 ContextAssembler loads prompts/base.md and builds the system prompt
-2. The task is sent to the LLM along with available tool definitions
-3. LLM responds (e.g., calls write_file tool)
-4. L2 ToolInterceptor validates the call:
-   - Checks parameters against schema
-   - Classifies risk level (WRITE)
-   - write_file is WRITE risk, approval_mode is risky_only → no approval needed
-5. L3 SecurityGuard checks the operation (if applicable)
-6. Tool executes → result returned
-7. L4 FeedbackTranslator checks for system events (truncation, errors, etc.)
-   - If any: generates FeedbackSignal and injects into next turn
-8. L5 EntropyManager checks if context quality has degraded
-   - If degraded: compresses/cleans before next LLM call
-9. Loop repeats until LLM produces a final response or max_iterations reached
+Turn N:
+  1. L5 EntropyManager.process()
+     → Remove stale feedback signals from history
+     → Deduplicate repeated tool results
+     → Compress if token count exceeds threshold
+     → EntropyGardener runs every N turns (checks golden rules)
+
+  2. L1 ContextAssembler.assemble()
+     → INDEX layers always injected (base prompt, system rules)
+     → DETAIL layers injected only if task keywords match
+     → Token budget enforced across all layers
+
+  3. L4 FeedbackTranslator.flush()
+     → Collect signals from previous turn (errors, blocks, truncations)
+     → Render as XML/Markdown/JSON hint → inject into system messages
+
+  4. LLM called with assembled context + history + tool schemas
+
+  5. LLM returns tool calls:
+     → L2 ToolInterceptor.execute() for each call:
+        - Schema validation
+        - CommandGuard check (for execute-risk tools)
+        - ApprovalManager.request() (if requires_approval)
+        - Handler invoked
+        - Output truncated if over max_output_tokens
+        - Audit record written
+        - FeedbackSignal emitted on any failure
+
+  6. Loop until LLM returns stop (no tool calls) or max_iterations reached
 ```
 
-### 3.3 Programmatic configuration (no YAML)
-
-You can skip the YAML file and configure everything in code:
+### 3.4 Programmatic configuration (no YAML)
 
 ```python
 from harness0 import HarnessEngine
 from harness0.core.config import (
     HarnessConfig,
     ContextConfig,
+    ContextLayerConfig,
     ToolGovernanceConfig,
     SecurityConfig,
     FeedbackConfig,
     EntropyConfig,
     LLMConfig,
+    GoldenRule,
 )
-from harness0.context import ContextLayer, FileSource
 
 config = HarnessConfig(
     llm=LLMConfig(provider="openai", model="gpt-4o"),
     context=ContextConfig(
-        layers=[
-            ContextLayer(name="base", priority=0, source=FileSource("prompts/base.md")),
-        ],
         total_token_budget=8000,
+        layers=[
+            ContextLayerConfig(
+                name="base",
+                source="prompts/base.md",
+                priority=0,
+                disclosure_level="index",
+            ),
+        ],
     ),
-    tools=ToolGovernanceConfig(default_risk="read"),
     security=SecurityConfig(
-        sandbox_enabled=True,
         blocked_commands=["rm -rf", "sudo"],
         approval_mode="risky_only",
     ),
-    feedback=FeedbackConfig(inject_hints=True),
-    entropy=EntropyConfig(compression_threshold=6000),
+    entropy=EntropyConfig(
+        gardener_enabled=True,
+        gardener_interval_turns=5,
+        golden_rules=[
+            GoldenRule(id="no_duplicate_tools",
+                       description="No two tools may share the same description",
+                       severity="error"),
+        ],
+    ),
     max_iterations=50,
 )
 
-engine = HarnessEngine(config=config)
+engine = HarnessEngine(config)
 ```
 
 ---
 
 ## 4. Configuration Reference
 
-The `harness.yaml` file controls all 5 layers. Below is a complete reference with all available fields and their defaults.
+All fields and their defaults.
 
-### 4.1 Top-level fields
+### 4.1 Top-level
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `max_iterations` | int | `50` | Maximum agent loop iterations before forced stop |
-| `checkpoint_enabled` | bool | `true` | Enable state checkpointing for long-task recovery |
-| `checkpoint_dir` | string | `.harness0/checkpoints` | Directory for checkpoint files |
+| `llm` | `LLMConfig` | see below | LLM provider settings |
+| `context` | `ContextConfig` | see below | L1 context assembly |
+| `tools` | `ToolGovernanceConfig` | see below | L2 tool governance |
+| `security` | `SecurityConfig` | see below | L3 security guard |
+| `feedback` | `FeedbackConfig` | see below | L4 feedback loop |
+| `entropy` | `EntropyConfig` | see below | L5 entropy management |
+| `max_iterations` | `int` | `50` | Max agent loop turns before forced stop |
+| `checkpoint_enabled` | `bool` | `True` | Reserved for future checkpoint persistence |
 
-### 4.2 `llm` — LLM Provider
+### 4.2 `llm`
 
-```yaml
-llm:
-  provider: openai          # "openai" | "anthropic"
-  model: gpt-4o             # Model identifier
-  api_key: ${OPENAI_API_KEY} # Supports env var expansion; omit to read from environment
-  base_url: null             # Custom API endpoint (for proxies or compatible APIs)
-  temperature: 0.0           # LLM temperature
-  max_tokens: 4096           # Max tokens in LLM response
-```
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `provider` | `"openai" \| "anthropic" \| "compatible"` | `"openai"` | LLM provider |
+| `model` | `str` | `"gpt-4o"` | Model name |
+| `api_key` | `str \| None` | `None` | API key (falls back to env var) |
+| `base_url` | `str \| None` | `None` | Override API endpoint |
+| `temperature` | `float` | `0.0` | Sampling temperature |
+| `max_tokens` | `int` | `4096` | Max tokens per LLM response |
 
-### 4.3 `context` — L1 Context Assembly
+### 4.3 `context`
 
-```yaml
-context:
-  layers:
-    - name: base                # Unique layer name
-      source: prompts/base.md   # File path, directory path, or "callable:function_name"
-      priority: 0               # Lower = loaded first, higher = loaded later (higher override)
-      freshness: static         # "static" | "per_session" | "per_turn"
-      max_tokens: null           # Per-layer token budget (null = no limit)
-      role: system              # Message role: "system" | "user" | "assistant"
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `layers` | `list[ContextLayerConfig]` | `[]` | Ordered list of context layers |
+| `total_token_budget` | `int` | `8000` | Max tokens for assembled context |
 
-    - name: project
-      source: AGENTS.md
-      priority: 10
-      freshness: per_session
+**`ContextLayerConfig` fields:**
 
-    - name: skills
-      source: skills/           # Directory: all .md files loaded as separate sub-layers
-      priority: 15
-      freshness: static
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | `str` | required | Unique layer identifier |
+| `source` | `str` | required | Source spec (see §5.2) |
+| `priority` | `int` | `0` | Load order; higher overrides lower |
+| `freshness` | `"static" \| "per_session" \| "per_turn"` | `"static"` | Cache policy |
+| `max_tokens` | `int \| None` | `None` | Per-layer token cap |
+| `disclosure_level` | `"index" \| "detail"` | `"index"` | Always injected vs keyword-gated |
+| `keywords` | `list[str]` | `[]` | Keywords that trigger DETAIL layers |
 
-    - name: runtime_state
-      source: callable:get_current_state   # Python callable, registered at runtime
-      priority: 20
-      freshness: per_turn
+### 4.4 `tools`
 
-  total_token_budget: 8000      # Total token budget across all layers
-```
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `default_risk` | `"read" \| "write" \| "execute" \| "critical"` | `"read"` | Default risk when not specified |
+| `max_output_tokens` | `int` | `5000` | Truncate tool output beyond this |
+| `audit_enabled` | `bool` | `True` | Write audit record for every call |
 
-**Layer resolution order**: Layers are sorted by `priority` (ascending). Lower priority layers are loaded first. When the total token budget is exceeded, lower-priority layers are truncated first.
+### 4.5 `security`
 
-**Source types**:
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `sandbox_enabled` | `bool` | `True` | Enable process sandbox |
+| `max_processes` | `int` | `5` | Concurrent subprocess limit |
+| `max_output_bytes` | `int` | `100000` | Per-process output cap (bytes) |
+| `default_timeout` | `int` | `30` | Subprocess timeout (seconds) |
+| `blocked_commands` | `list[str]` | `["rm -rf", "sudo", "> /dev/sda", ":(){ :\|:& };:"]` | Blocked command patterns |
+| `approval_mode` | `"always" \| "risky_only" \| "never"` | `"risky_only"` | When to require approval |
 
-| Source syntax | Resolved as |
+### 4.6 `feedback`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `inject_hints` | `bool` | `True` | Inject signals into next turn's context |
+| `signal_format` | `"xml" \| "json" \| "markdown"` | `"xml"` | Signal rendering format |
+| `max_signals_per_turn` | `int` | `10` | Cap signals collected per turn |
+
+### 4.7 `entropy`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `compression_threshold` | `int` | `6000` | Trigger compression above this token count |
+| `decay_check_interval` | `int` | `10` | Signal staleness window (in turns) |
+| `detect_conflicts` | `bool` | `True` | Scan for contradictory instructions |
+| `staleness_threshold_hours` | `int` | `24` | Flag FileSource layers older than this |
+| `gardener_enabled` | `bool` | `True` | Enable background quality GC |
+| `gardener_interval_turns` | `int` | `5` | Run gardener every N turns |
+| `golden_rules` | `list[GoldenRule]` | `[]` | Mechanically verifiable invariants |
+
+**`GoldenRule` fields:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `id` | `str` | required | Rule identifier (see built-in IDs below) |
+| `description` | `str` | required | Human-readable rule description |
+| `severity` | `"error" \| "warning" \| "info"` | `"warning"` | Violation severity |
+
+**Built-in golden rule IDs:**
+
+| ID | What it checks |
 |---|---|
-| `path/to/file.md` | `FileSource` — load single file |
-| `path/to/directory/` | `DirectorySource` — load all `.md`/`.yaml` files in directory |
-| `callable:function_name` | `CallableSource` — call a registered Python function |
-| (inline string in programmatic config) | `InlineSource` — use string directly |
-
-**Freshness modes**:
-
-| Mode | Behavior |
-|---|---|
-| `static` | Loaded once at engine initialization. Never reloaded. |
-| `per_session` | Reloaded when a new session/run starts. |
-| `per_turn` | Reloaded before every LLM call. Use for dynamic state. |
-
-### 4.4 `tools` — L2 Tool Governance
-
-```yaml
-tools:
-  default_risk: read            # Default risk level for tools without explicit risk_level
-  max_output_tokens: 5000       # Max tokens in tool output before truncation
-  default_timeout: 30           # Default tool execution timeout in seconds
-  audit_enabled: true           # Log all tool calls to audit trail
-  audit_file: null              # File path for audit log (null = in-memory only)
-```
-
-Tool-specific configuration is done via the `@engine.tool()` decorator or `ToolDefinition` objects, not in YAML. The YAML sets global defaults.
-
-### 4.5 `security` — L3 Security Guard
-
-```yaml
-security:
-  sandbox_enabled: true         # Enable subprocess sandboxing
-  max_processes: 5              # Max concurrent subprocesses
-  max_output_bytes: 100000      # Max output per subprocess (bytes), truncated beyond this
-  default_timeout: 30           # Default subprocess timeout (seconds)
-
-  blocked_commands:             # Command patterns to block (regex-capable)
-    - "rm -rf"
-    - "sudo"
-    - "> /dev/sda"
-    - "mkfs"
-    - "dd if="
-    - ":(){:|:&};:"             # Fork bomb
-
-  approval_mode: risky_only     # "always" | "risky_only" | "never"
-                                # always: approve every tool call
-                                # risky_only: approve EXECUTE and CRITICAL risk levels
-                                # never: no approval (use with caution)
-
-  approval_cache: true          # Cache approved actions by fingerprint (skip repeat approvals)
-```
-
-### 4.6 `feedback` — L4 Feedback Loop
-
-```yaml
-feedback:
-  inject_hints: true            # Inject FeedbackSignals into next turn's context
-  signal_format: xml            # "xml" | "json" | "markdown" — format of injected hints
-  max_signals_per_turn: 5       # Max feedback signals to inject per turn (oldest dropped first)
-  include_suggestions: true     # Include actionable suggestions in signals
-```
-
-### 4.7 `entropy` — L5 Entropy Management
-
-```yaml
-entropy:
-  enabled: true                   # Enable entropy management
-  compression_threshold: 6000     # Token count that triggers compression
-  decay_check_interval: 10        # Check for decay every N turns
-  detect_conflicts: true          # Detect contradictory rules/instructions
-  detect_staleness: true          # Detect temporally stale content
-  staleness_threshold_hours: 24   # Content older than this is flagged as stale
-  detect_repetition: true         # Detect duplicate/near-duplicate content
-  compression_strategy: targeted  # "targeted" | "summarize" | "sliding_window"
-                                  # targeted: remove/clean specific degraded content
-                                  # summarize: LLM-based summarization of old content
-                                  # sliding_window: keep only most recent N messages
-```
+| `no_stale_layers` | All `FileSource` layers are newer than `staleness_threshold_hours` |
+| `no_duplicate_tools` | No two registered tools share the same description |
+| `no_conflicting_instructions` | No contradictory directives across context layers |
 
 ---
 
@@ -389,363 +416,382 @@ entropy:
 
 ### 5.1 What it does
 
-The Context Assembler builds the LLM prompt dynamically each turn by loading, prioritizing, and budgeting content from multiple sources.
+L1 assembles the system prompt from multiple `ContextLayer` objects each turn. The core insight: prompts are not static documents — they are assembly systems with priority, freshness, and progressive disclosure.
 
-### 5.2 Why it matters
+### 5.2 Source types
 
-Without structured context assembly, developers end up with:
-- One monolithic system prompt that grows until it exceeds token limits
-- No control over which information the model prioritizes
-- Stale project rules mixed with fresh runtime state
-- No way to know what the model actually "sees"
-
-### 5.3 Defining layers in YAML
-
-```yaml
-context:
-  layers:
-    - name: base
-      source: prompts/base.md
-      priority: 0
-      freshness: static
-
-    - name: soul
-      source: SOUL.md
-      priority: 5
-      freshness: static
-      max_tokens: 500
-
-    - name: project
-      source: AGENTS.md
-      priority: 10
-      freshness: per_session
-
-    - name: skills
-      source: skills/
-      priority: 15
-      freshness: static
-
-    - name: runtime_state
-      source: callable:get_current_state
-      priority: 20
-      freshness: per_turn
-      max_tokens: 1000
-
-  total_token_budget: 8000
-```
-
-### 5.4 Defining layers in code
+| Spec string | Source class | Description |
+|---|---|---|
+| `"path/to/file.md"` | `FileSource` | Single file from disk |
+| `"dir:path/to/dir"` | `DirectorySource` | All `*.md` files in directory, concatenated |
+| `"inline:some text"` | `InlineSource` | Literal string content |
+| Python object | `CallableSource` | `async` or `sync` callable returning a string |
 
 ```python
 from harness0.context import (
-    ContextAssembler,
-    ContextLayer,
-    FileSource,
-    DirectorySource,
-    CallableSource,
-    InlineSource,
+    ContextLayer, FileSource, DirectorySource, InlineSource, CallableSource,
+    Freshness, DisclosureLevel,
 )
 
+# Load a single file
+FileSource("prompts/base.md")
+
+# Load all .md files in a directory
+DirectorySource("docs/", glob="**/*.md")
+
+# Inline content (useful for testing)
+InlineSource("You are a helpful coding assistant.")
+
+# Dynamic content from a callable
 async def get_current_state() -> str:
-    return "Current directory: /home/user/project\nModified files: main.py, utils.py"
+    return f"Current directory: {os.getcwd()}"
+
+CallableSource(get_current_state)
+```
+
+### 5.3 ContextLayer
+
+```python
+from harness0.context import ContextLayer, FileSource, Freshness, DisclosureLevel
+
+layer = ContextLayer(
+    name="base",
+    source=FileSource("prompts/base.md"),
+    priority=0,                           # Higher priority = injected later = takes precedence
+    freshness=Freshness.STATIC,           # "static" | "per_session" | "per_turn"
+    max_tokens=2000,                      # Optional per-layer token cap
+    disclosure_level=DisclosureLevel.INDEX,  # "index" | "detail"
+    keywords=[],                          # Keywords that activate DETAIL layers
+)
+```
+
+**Freshness policies:**
+
+| Policy | Behavior |
+|---|---|
+| `static` | Load once at initialization, cache forever |
+| `per_session` | Reload at each new session start |
+| `per_turn` | Reload on every turn (for dynamic state) |
+
+### 5.4 Progressive Disclosure
+
+The most important L1 design principle (from OpenAI Harness Engineering):
+
+> "Give the agent a map, not a 1,000-page manual."
+
+**INDEX layers** (`disclosure_level="index"`) are **always** injected. Use them for:
+- Base system prompt
+- Rules summary
+- AGENTS.md index (short pointers to detailed docs)
+
+**DETAIL layers** (`disclosure_level="detail"`) are injected **only when** the current task contains any of the declared `keywords`. Use them for:
+- Domain-specific deep-dives (security guide, deployment runbook)
+- Large reference docs that are only sometimes relevant
+
+```python
+# Always injected — acts as the "map"
+ContextLayer(
+    name="base",
+    source=FileSource("AGENTS.md"),
+    priority=0,
+    disclosure_level=DisclosureLevel.INDEX,
+)
+
+# Only injected for security-related tasks
+ContextLayer(
+    name="security-detail",
+    source=FileSource("docs/security.md"),
+    priority=10,
+    disclosure_level=DisclosureLevel.DETAIL,
+    keywords=["security", "permission", "auth", "token", "credential"],
+)
+```
+
+```python
+layer.is_relevant_for_task("fix the authentication bug")  # True — matches "auth"
+layer.is_relevant_for_task("write a sorting function")     # False — no keyword match
+```
+
+### 5.5 ContextAssembler
+
+```python
+from harness0.context import ContextAssembler, ContextLayer, FileSource, DisclosureLevel
 
 assembler = ContextAssembler(
     layers=[
-        ContextLayer(
-            name="base",
-            priority=0,
-            source=FileSource("prompts/base.md"),
-            freshness="static",
-        ),
-        ContextLayer(
-            name="soul",
-            priority=5,
-            source=InlineSource("You are thoughtful, precise, and prefer simple solutions."),
-            freshness="static",
-            max_tokens=500,
-        ),
-        ContextLayer(
-            name="skills",
-            priority=15,
-            source=DirectorySource("skills/"),
-            freshness="static",
-        ),
-        ContextLayer(
-            name="runtime_state",
-            priority=20,
-            source=CallableSource(get_current_state),
-            freshness="per_turn",
-            max_tokens=1000,
-        ),
+        ContextLayer(name="base", source=FileSource("base.md"),
+                     disclosure_level=DisclosureLevel.INDEX),
+        ContextLayer(name="detail", source=FileSource("detail.md"),
+                     disclosure_level=DisclosureLevel.DETAIL, keywords=["db"]),
     ],
     total_token_budget=8000,
 )
+
+# Returns list[Message] to prepend to the LLM call
+messages = await assembler.assemble(turn_context)
+
+# Dynamic modification
+assembler.add_layer(new_layer)
+assembler.remove_layer("old-layer-name")  # Returns True if found
 ```
 
-### 5.5 How assembly works
-
-On each call to `assembler.assemble(turn_context)`:
-
-1. **Load** — Each layer loads its content based on freshness policy. `static` layers use cached content. `per_turn` layers reload every time.
-2. **Sort** — Layers are ordered by priority (ascending).
-3. **Budget** — Token counts are calculated. If the total exceeds `total_token_budget`, lower-priority layers are truncated first. Per-layer `max_tokens` limits are enforced individually.
-4. **Format** — Each layer's content is formatted into a `Message` object with the appropriate role.
-5. **Return** — The assembled messages are returned as a `list[Message]`.
-
-### 5.6 Registering callable sources
-
-When using `callable:function_name` in YAML, you must register the function at runtime:
-
-```python
-engine = HarnessEngine.from_config("harness.yaml")
-
-async def get_current_state() -> str:
-    return "Working directory: /project\nGit branch: main"
-
-engine.context.register_callable("get_current_state", get_current_state)
-```
-
-### 5.7 Recommended layer structure
-
-A typical project might use this layering:
-
-| Priority | Name | Content | Freshness |
-|---|---|---|---|
-| 0 | `base` | Core identity and instructions | static |
-| 5 | `soul` | Personality and style preferences (SOUL.md) | static |
-| 10 | `project` | Project-specific rules and context (AGENTS.md) | per_session |
-| 15 | `skills` | Available skill descriptions (skills/*.md) | static |
-| 20 | `state` | Current runtime state (working dir, open files, etc.) | per_turn |
+**Assembly algorithm:**
+1. Select: always include INDEX layers; include DETAIL layers only when `keywords` match task
+2. Load: content loaded with freshness-aware caching
+3. Sort by priority (ascending)
+4. Apply token budgets: per-layer cap first, then total budget
+5. INDEX layers truncated if over budget (never dropped); DETAIL layers dropped if over budget
+6. Return as a single `system` message
 
 ---
 
 ## 6. L2: Tool Governance
 
-### 6.1 What it does
-
-The Tool Governance layer manages the full lifecycle of tool calls: registration, discovery, validation, risk classification, approval, execution, output management, and auditing.
-
-### 6.2 Registering tools
-
-**Via decorator** (recommended):
+### 6.1 Risk levels
 
 ```python
-@engine.tool(risk_level="read")
+from harness0.tools import RiskLevel
+
+RiskLevel.READ      # No side effects (read_file, search, list)
+RiskLevel.WRITE     # Modifies persistent state (write_file, create_dir)
+RiskLevel.EXECUTE   # Runs code or shell commands
+RiskLevel.CRITICAL  # Irreversible or dangerous (deploy, delete prod data)
+```
+
+### 6.2 Registering tools via decorator
+
+```python
+engine = HarnessEngine.default()
+
+@engine.tool(risk_level=RiskLevel.READ)
 async def read_file(path: str) -> str:
     """Read a file and return its contents."""
     with open(path) as f:
         return f.read()
 
-@engine.tool(risk_level="write")
-async def write_file(path: str, content: str) -> str:
-    """Write content to a file."""
-    with open(path, "w") as f:
-        f.write(content)
-    return f"Written {len(content)} chars to {path}"
-
 @engine.tool(
-    risk_level="execute",
-    requires_approval=True,
-    timeout=60,
-    max_output_tokens=10000,
-)
-async def run_command(command: str) -> str:
-    """Execute a shell command."""
-    ...
-```
-
-**Via ToolDefinition** (programmatic):
-
-```python
-from harness0.tools import ToolDefinition, RiskLevel
-
-tool_def = ToolDefinition(
-    name="run_command",
-    description="Execute a shell command",
-    parameters={
-        "type": "object",
-        "properties": {
-            "command": {"type": "string", "description": "The command to execute"},
-        },
-        "required": ["command"],
-    },
     risk_level=RiskLevel.EXECUTE,
     requires_approval=True,
-    timeout_seconds=60,
-    max_output_tokens=10000,
+    timeout=60,
+    max_output_tokens=2000,
+    description="Execute a shell command in the project sandbox.",
 )
-
-engine.tools.register(tool_def, handler=run_command_handler)
+async def run_command(command: str) -> str:
+    import subprocess
+    return subprocess.check_output(command, shell=True, text=True)
 ```
 
-### 6.3 Risk levels
+**Decorator parameters:**
 
-| Level | Value | Meaning | Default approval behavior |
+| Parameter | Type | Default | Description |
 |---|---|---|---|
-| `READ` | `"read"` | No side effects. Safe to execute freely. | No approval needed |
-| `WRITE` | `"write"` | Modifies state (files, databases). | No approval by default |
-| `EXECUTE` | `"execute"` | Runs code or shell commands. | Approval when `approval_mode: risky_only` |
-| `CRITICAL` | `"critical"` | Irreversible or potentially dangerous. | Always requires approval |
+| `risk_level` | `RiskLevel \| str` | `RiskLevel.READ` | Risk classification |
+| `requires_approval` | `bool` | `False` | Require human approval before execution |
+| `timeout` | `int \| None` | `None` | Per-call timeout (seconds) |
+| `max_output_tokens` | `int \| None` | `None` | Override global max_output_tokens |
+| `description` | `str \| None` | `None` | Override docstring as tool description |
 
-### 6.4 The interception pipeline
+### 6.3 ToolDefinition
 
-Every tool call passes through this pipeline in order:
+```python
+from harness0.tools import ToolDefinition, RiskLevel, ParameterSchema
 
-```
-1. Schema Validation
-   - Check that call parameters match the tool's JSON Schema
-   - If invalid: reject with FeedbackSignal explaining the error
-
-2. Risk Assessment
-   - Look up the tool's RiskLevel
-   - Determine if approval is required based on risk + approval_mode
-
-3. Approval Check (if required)
-   - Check fingerprint cache (skip if identical action was previously approved)
-   - If not cached: request approval from the approval backend
-   - If denied: reject with FeedbackSignal
-
-4. Execute
-   - Run the tool handler with the validated parameters
-   - Enforce timeout (kill if exceeded)
-
-5. Output Truncation
-   - If output exceeds max_output_tokens: truncate and generate FeedbackSignal
-
-6. Audit Log
-   - Record: tool name, parameters, risk level, approval status, result (truncated),
-     execution time, timestamp
-```
-
-### 6.5 Output truncation
-
-When a tool returns more content than `max_output_tokens`, the output is truncated and a feedback signal is generated:
-
-```
-FeedbackSignal(
-    type="warning",
-    source="tools.interceptor",
-    message="Tool 'grep_search' output was truncated from 12,340 to 5,000 tokens.",
-    actionable=True,
-    suggestion="Consider narrowing your search pattern or limiting the search scope."
+definition = ToolDefinition(
+    name="search_files",
+    description="Search for files matching a glob pattern.",
+    parameters=[
+        ParameterSchema(name="pattern", type="string",
+                        description="Glob pattern to match", required=True),
+        ParameterSchema(name="directory", type="string",
+                        description="Root directory to search", required=False,
+                        default="."),
+    ],
+    risk_level=RiskLevel.READ,
+    handler=my_search_function,
 )
+engine.registry.register(definition)
 ```
 
-The model receives the truncated output plus this signal, so it knows content was lost and can adjust its approach.
+### 6.4 ToolRegistry
 
-### 6.6 Audit trail
-
-When `audit_enabled: true`, every tool call is logged:
-
-```json
-{
-  "timestamp": "2026-03-25T10:30:45Z",
-  "tool": "run_command",
-  "parameters": {"command": "ls -la src/"},
-  "risk_level": "execute",
-  "approval": "approved",
-  "result_tokens": 342,
-  "truncated": false,
-  "duration_ms": 1523,
-  "error": null
-}
+```python
+engine.registry.names()           # list[str] — all registered tool names
+engine.registry.get("read_file")  # ToolDefinition | None
+engine.registry.openai_schemas()  # list[dict] — OpenAI function-calling format
+engine.registry.has_duplicates()  # list[(name_a, name_b)] — same-description pairs
+len(engine.registry)              # int
+"read_file" in engine.registry    # bool
 ```
 
-If `audit_file` is set, logs are appended to that file. Otherwise, logs are kept in memory and accessible via `engine.tools.audit_log`.
+### 6.5 Interception pipeline
+
+Every tool call flows through this pipeline:
+
+```
+ToolCall
+  → 1. Lookup         — verify tool is registered
+  → 2. Validate       — check required args against ToolDefinition.parameters
+  → 3. CommandGuard   — for EXECUTE/CRITICAL: check command against blocklist
+  → 4. Approval       — if requires_approval or CRITICAL: request user approval
+  → 5. Execute        — call handler (with optional timeout)
+  → 6. Truncate       — cap output at max_output_tokens
+  → 7. Audit          — write AuditRecord
+  → ToolResult
+```
+
+On any failure at steps 1–4, execution is aborted and a `FeedbackSignal` is emitted.
+
+### 6.6 ToolResult
+
+```python
+class ToolResult(BaseModel):
+    tool_call_id: str
+    name: str
+    output: str         # Tool's return value as string
+    error: str | None   # Set if tool failed at any step
+    truncated: bool     # True if output was cut to max_output_tokens
+    duration_ms: float  # Wall-clock execution time
+```
+
+### 6.7 Executing tools directly
+
+```python
+# Outside the agent loop — useful for testing
+result = await engine.execute_tool("read_file", path="README.md")
+print(result.output)
+print(result.error)    # None if successful
+print(result.truncated)
+```
+
+### 6.8 Audit log
+
+```python
+records = engine.interceptor.audit_log()
+
+for r in records:
+    print(r.tool_name, r.risk_level, r.duration_ms, r.error)
+```
 
 ---
 
 ## 7. L3: Security Guard
 
-### 7.1 What it does
+### 7.1 Three lines of defense
 
-The Security Guard enforces safety boundaries at runtime. It does not rely on the model "being well-behaved" — it enforces boundaries regardless of model behavior.
+| Component | Responsibility |
+|---|---|
+| `CommandGuard` | Pattern-based blocklist for shell commands |
+| `ProcessSandbox` | Resource limits on subprocess execution |
+| `ApprovalManager` | Risk-based human-in-the-loop approval |
 
-### 7.2 ProcessSandbox
+### 7.2 CommandGuard
 
-The ProcessSandbox manages subprocess execution with hard limits:
+```python
+from harness0.security import CommandGuard
+from harness0.core.config import SecurityConfig
 
-```yaml
-security:
-  sandbox_enabled: true
-  max_processes: 5          # No more than 5 concurrent subprocesses
-  max_output_bytes: 100000  # Output capped at ~100KB per process
-  default_timeout: 30       # Processes killed after 30 seconds
+guard = CommandGuard(SecurityConfig(blocked_commands=["rm -rf", "sudo"]))
+
+result = guard.check("sudo apt install nginx")
+result.allowed          # False
+result.matched_pattern  # "sudo"
+result.signal           # FeedbackSignal with fix_instructions
+result.signal.fix_instructions  # Step-by-step repair guidance for the agent
+
+# Check a safe command
+result = guard.check("ls -la")
+result.allowed  # True
+
+# Add patterns at runtime
+guard.add_pattern("curl | bash")
 ```
 
-**Behavior**:
-- When a tool calls a subprocess, it goes through the sandbox.
-- If `max_processes` is reached, new subprocess requests queue until a slot opens.
-- If output exceeds `max_output_bytes`, the output is truncated and a FeedbackSignal is generated via L4.
-- If a process exceeds `default_timeout`, it is killed and a FeedbackSignal is generated.
-- When a session ends, all subprocesses are cleaned up automatically.
-
-### 7.3 CommandGuard
-
-The CommandGuard parses commands and checks them against a blocklist before execution:
-
-```yaml
-security:
-  blocked_commands:
-    - "rm -rf"
-    - "sudo"
-    - "> /dev/sda"
-    - "mkfs"
-    - "dd if="
-    - ":(){:|:&};:"
-```
-
-**Behavior**:
-- Commands are parsed and matched against each pattern.
-- Patterns support regex for flexible matching.
-- If a command matches any blocked pattern, execution is rejected.
-- The rejection generates a `GuardResult` with a human-readable reason.
-- The `GuardResult` is passed to L4 FeedbackTranslator, which creates a model-consumable signal.
-
-**Example flow**:
+**Key design**: every rejected command produces a `FeedbackSignal` with `fix_instructions` — specific, numbered steps the agent can follow. The agent never receives a bare exception.
 
 ```
-Model calls: run_command("sudo rm -rf /tmp/old_files")
+Example fix_instructions for "sudo rm -rf /tmp":
+  1. Do NOT retry this command — it matches the security blocklist.
+  2. Reason: pattern `rm -rf` causes irreversible side effects.
+  3. Consider these safer alternatives:
+     • rm -r <specific_path>
+     • shutil.rmtree(<path>) in Python
+  4. If truly required, request explicit approval from the user.
+```
 
-CommandGuard detects: matches "sudo" pattern
-  → GuardResult(blocked=True, reason="Command contains 'sudo' which is blocked by security policy")
-  → L4 translates to FeedbackSignal:
-    "Command blocked: contains 'sudo'. Suggestion: run without sudo, or target specific files with 'rm /tmp/old_files/specific_file'"
-  → Model receives signal in next turn and adjusts approach
+### 7.3 ProcessSandbox
+
+```python
+from harness0.security import ProcessSandbox
+from harness0.core.config import SecurityConfig
+
+sandbox = ProcessSandbox(SecurityConfig(
+    max_processes=5,
+    max_output_bytes=100_000,
+    default_timeout=30,
+))
+
+result = await sandbox.run(
+    command="find . -name '*.py'",
+    tool_call_id="call_abc123",
+    timeout=15,       # Override default_timeout
+    cwd="/project",
+)
+
+result.output      # Captured stdout+stderr
+result.error       # None or error message
+result.truncated   # True if output exceeded max_output_bytes
+result.duration_ms
+
+# Clean up all processes when session ends
+await sandbox.cleanup()
 ```
 
 ### 7.4 ApprovalManager
 
-The ApprovalManager gates risky actions behind human approval:
+```python
+from harness0.security import ApprovalManager, StdinApprovalBackend, AutoApproveBackend, AutoDenyBackend
 
-```yaml
-security:
-  approval_mode: risky_only   # "always" | "risky_only" | "never"
-  approval_cache: true
+manager = ApprovalManager(
+    config=SecurityConfig(approval_mode="risky_only"),
+    backend=StdinApprovalBackend(),  # default: prompts on stdin
+)
+
+approved = await manager.request(
+    action="deploy_to_production(env='prod')",
+    risk_level="critical",
+    context="Tool: Deploy the application to production",
+)
+
+# Custom approval backend
+class SlackApprovalBackend(ApprovalBackend):
+    async def request(self, action: str, context: str) -> bool:
+        # Send to Slack, wait for ✅ reaction
+        ...
+
+manager = ApprovalManager(config=SecurityConfig(), backend=SlackApprovalBackend())
 ```
 
-**Approval modes**:
+**Approval modes:**
 
 | Mode | Behavior |
 |---|---|
-| `always` | Every tool call requires approval, regardless of risk level |
-| `risky_only` | Only `EXECUTE` and `CRITICAL` risk levels require approval |
-| `never` | No approvals. Use only in trusted/sandboxed environments |
+| `always` | Every tool call requires approval |
+| `risky_only` | Only `EXECUTE` and `CRITICAL` require approval |
+| `never` | Skip all approvals (use only in trusted environments) |
 
-**Fingerprint caching**: When `approval_cache: true`, approved actions are cached by SHA-256 fingerprint (hash of tool name + parameters). If the same action is requested again, approval is skipped. This prevents repeatedly asking "allow ls -la?" in a loop.
-
-**Custom approval backend**: The default approval backend prompts via stdin. You can provide a custom backend for integration with Slack, Telegram, web UI, etc.:
+**Fingerprint cache**: Once approved, the same action (SHA-256 of `tool_name + arguments`) is auto-approved for the session.
 
 ```python
-from harness0.security import ApprovalManager, ApprovalBackend
-
-class SlackApprovalBackend(ApprovalBackend):
-    async def request_approval(self, action: str, details: dict) -> bool:
-        # Send to Slack, wait for response
-        ...
-
-engine.security.set_approval_backend(SlackApprovalBackend())
+manager.clear_cache()  # Reset fingerprint cache
 ```
+
+**Built-in backends:**
+
+| Class | Behavior |
+|---|---|
+| `StdinApprovalBackend` | Default. Prompts user on stdin. |
+| `AutoApproveBackend` | Always approves. For trusted/test environments. |
+| `AutoDenyBackend` | Always denies. For testing denial flows. |
 
 ---
 
@@ -753,75 +799,174 @@ engine.security.set_approval_backend(SlackApprovalBackend())
 
 ### 8.1 What it does
 
-The Feedback Loop translates raw system events into structured signals that the model can understand and act on. Without this layer, the model sees cryptic errors. With it, the model sees actionable explanations.
+L4 translates raw system events into structured `FeedbackSignal` objects that the model can understand and act on. Without this layer, the model sees cryptic errors. With it, the model sees the problem and what to do about it.
 
-### 8.2 FeedbackSignal structure
+### 8.2 FeedbackSignal
 
 ```python
 class FeedbackSignal(BaseModel):
-    type: SignalType           # "error" | "warning" | "info" | "constraint"
-    source: str                # Subsystem that generated this signal
-    message: str               # Clear explanation of what happened
-    actionable: bool           # Can the model do something about it?
-    suggestion: str | None     # Recommended next action (if actionable)
+    id: str                      # Auto-generated 8-char hex
+    type: SignalType             # "error" | "warning" | "info" | "constraint"
+    source: str                  # Subsystem (e.g. "security.command_guard")
+    message: str                 # Human-readable explanation
+    actionable: bool             # Can the agent do something about it?
+    suggestion: str | None       # Brief recommended next action
+    fix_instructions: str | None # Step-by-step agent-consumable repair guidance
+    metadata: dict               # Extra structured data
+    created_at: float            # Unix timestamp
 ```
+
+The `fix_instructions` field is the key differentiator: it contains complete, numbered steps the agent can execute immediately — not just a description of what went wrong, but exactly what to do next.
 
 ### 8.3 Signal types
 
-| Type | When used | Example |
+| Type | When used | Example message |
 |---|---|---|
-| `error` | Tool execution failed | "File '/nonexistent' not found." |
-| `warning` | Something was degraded or limited | "Output truncated from 50K to 5K tokens." |
-| `info` | Non-critical information | "Approval was granted for 'deploy' action." |
-| `constraint` | Action was blocked by policy | "Command 'sudo apt install' blocked by security policy." |
+| `error` | Tool execution failed | "Tool `read_file` failed: FileNotFoundError: /no.txt" |
+| `warning` | Something was degraded or limited | "Output truncated from 12K to 5K tokens." |
+| `info` | Non-critical information | "Approval auto-granted via fingerprint cache." |
+| `constraint` | Action blocked by policy | "Command `sudo ...` blocked by security policy." |
 
-### 8.4 Automatic translation
+### 8.4 FeedbackTranslator
 
-The FeedbackTranslator automatically translates events from other layers:
-
-| Source Event | Signal Type | Example Message |
-|---|---|---|
-| L2: Schema validation failure | `error` | "Tool 'write_file' called with invalid parameters: 'content' is required." |
-| L2: Output truncation | `warning` | "Tool output truncated from 12K to 5K tokens. Consider narrowing scope." |
-| L3: Command blocked | `constraint` | "Command 'rm -rf /' blocked by security policy. Use targeted deletion." |
-| L3: Subprocess timeout | `error` | "Command exceeded 30s timeout. Break into smaller steps." |
-| L3: Approval denied | `constraint` | "Action 'deploy' denied by approval policy. Requires user confirmation." |
-| L5: Context compression | `info` | "Older conversation history was compressed to stay within token budget." |
-| L5: Rule conflict detected | `warning` | "Contradictory instructions detected: rule A says X, rule B says not-X." |
-
-### 8.5 Signal injection
-
-When `feedback.inject_hints: true`, signals are formatted and injected into the next turn's context. The format depends on `signal_format`:
-
-**XML format** (`signal_format: xml`):
-
-```xml
-<system_hint source="security.command_guard" type="constraint">
-Command 'sudo apt install nginx' was blocked by security policy.
-Suggestion: Install packages without sudo, or ask the user to install manually.
-</system_hint>
-```
-
-**JSON format** (`signal_format: json`):
-
-```json
-{"type": "constraint", "source": "security.command_guard", "message": "Command blocked...", "suggestion": "..."}
-```
-
-**Markdown format** (`signal_format: markdown`):
-
-```markdown
-> **[Security Guard]** Command 'sudo apt install nginx' was blocked by security policy.
-> *Suggestion:* Install packages without sudo, or ask the user to install manually.
-```
-
-### 8.6 Accessing signals programmatically
+The `FeedbackTranslator` provides static factory methods for every common system event:
 
 ```python
-result = await engine.run("Deploy the app")
+from harness0.feedback import FeedbackTranslator
 
-for signal in result.feedback_signals:
-    print(f"[{signal.type}] {signal.source}: {signal.message}")
+# Command blocked by L3
+signal = FeedbackTranslator.command_blocked(
+    command="sudo apt install",
+    reason="contains 'sudo'",
+    allowed_alternatives=["apt install (without sudo)"],
+)
+
+# Tool output truncated
+signal = FeedbackTranslator.output_truncated(
+    tool_name="grep_search",
+    original_tokens=12000,
+    limit_tokens=5000,
+)
+
+# Subprocess timed out
+signal = FeedbackTranslator.subprocess_timeout(
+    command="npm install",
+    timeout_seconds=30,
+)
+
+# Approval denied
+signal = FeedbackTranslator.approval_denied(
+    action="deploy_to_production()",
+    approver="user",
+)
+
+# Schema validation failed
+signal = FeedbackTranslator.tool_schema_invalid(
+    tool_name="write_file",
+    error="Missing required parameter: `content`",
+)
+
+# Generic exception
+signal = FeedbackTranslator.from_exception(exc, source="tools.my_tool")
+
+# Context layer stale (from L5)
+signal = FeedbackTranslator.context_stale(layer_name="base", age_hours=36.5)
+
+# Golden rule violated (from L5)
+signal = FeedbackTranslator.golden_rule_violated(
+    rule_id="no_duplicate_tools",
+    description="No two tools may share the same description",
+    details="Tools `read_file` and `read_doc` have identical descriptions.",
+)
+
+# Custom signal
+signal = FeedbackTranslator.custom(
+    source="my_system.validator",
+    message="Schema version mismatch detected.",
+    type=SignalType.WARNING,
+    fix_instructions="1. Run `migrate.py`\n2. Restart the service.",
+)
+```
+
+### 8.5 Collecting and flushing signals
+
+The `FeedbackTranslator` is stateful per turn. All signals are buffered and flushed at the start of the next turn:
+
+```python
+from harness0.feedback import FeedbackTranslator, SignalType
+
+translator = FeedbackTranslator(config.feedback)
+
+# Add a signal (typically called by L2/L3, not you directly)
+await translator.add(my_signal)
+
+# Flush signals for this turn (called by engine.run() automatically)
+bundle = await translator.flush()  # returns SignalBundle, resets buffer
+
+bundle.signals          # list[FeedbackSignal]
+bundle.has_errors()     # bool
+bundle.has_actionable() # bool
+bundle.render("xml")    # str — formatted for injection into context
+```
+
+### 8.6 Signal rendering
+
+```python
+signal = FeedbackSignal(
+    type=SignalType.CONSTRAINT,
+    source="security.command_guard",
+    message="Command `sudo rm -rf /tmp` blocked.",
+    fix_instructions="1. Do NOT retry...\n2. Use rm -r instead.",
+)
+
+# XML (default)
+print(signal.to_xml_hint())
+```
+
+```xml
+<harness:signal id="a3f8c1d2" type="constraint" source="security.command_guard">
+  <message>Command `sudo rm -rf /tmp` blocked.</message>
+  <fix_instructions>1. Do NOT retry...
+2. Use rm -r instead.</fix_instructions>
+</harness:signal>
+```
+
+```python
+# Markdown
+print(signal.to_markdown_hint())
+```
+
+```markdown
+🔒 **[security.command_guard]** Command `sudo rm -rf /tmp` blocked.
+
+**How to fix:**
+1. Do NOT retry...
+2. Use rm -r instead.
+```
+
+```python
+# JSON
+signal.to_json_hint()  # dict with "harness_signal" key
+```
+
+A `SignalBundle` wraps multiple signals in a container tag:
+
+```xml
+<harness:signals>
+  <harness:signal ...> ... </harness:signal>
+  <harness:signal ...> ... </harness:signal>
+</harness:signals>
+```
+
+### 8.7 Accessing signals programmatically
+
+```python
+result = await engine.run("Deploy the app", llm_client=client)
+
+# All signal bundles accumulated across the run
+for bundle in result.signals:
+    for signal in bundle.signals:
+        print(f"[{signal.type}] {signal.source}: {signal.message}")
 ```
 
 ---
@@ -830,338 +975,435 @@ for signal in result.feedback_signals:
 
 ### 9.1 What it does
 
-The Entropy Manager detects and repairs context degradation in long-running agent sessions. While other frameworks do passive compression (summarize when full), harness0 does active quality maintenance.
+L5 detects and repairs context degradation in long-running agent sessions. While other frameworks do passive compression (summarize when full), harness0 does active quality maintenance.
 
-### 9.2 Configuration
+**Passive (other frameworks)**: Triggered only when token limit is reached. Method: LLM summarizes old messages. Blunt — treats all history the same.
 
-```yaml
-entropy:
-  enabled: true
-  compression_threshold: 6000     # Trigger compression when context exceeds this token count
-  decay_check_interval: 10        # Run decay detection every N turns
-  detect_conflicts: true
-  detect_staleness: true
-  staleness_threshold_hours: 24
-  detect_repetition: true
-  compression_strategy: targeted  # "targeted" | "summarize" | "sliding_window"
+**Active (harness0)**: Runs proactively every turn. Detects specific degradation types and applies targeted fixes. Includes a background GC (EntropyGardener).
+
+### 9.2 EntropyManager
+
+```python
+from harness0.entropy import EntropyManager
+from harness0.core.config import EntropyConfig
+
+manager = EntropyManager(
+    config=EntropyConfig(
+        compression_threshold=6000,
+        decay_check_interval=10,
+        detect_conflicts=True,
+        staleness_threshold_hours=24,
+    ),
+    translator=my_feedback_translator,
+    tool_registry=my_tool_registry,
+)
+
+# In your agent loop each turn:
+messages, garden_actions = await manager.process(
+    messages=state.messages,
+    turn_context=turn_ctx,
+    context_layers=my_layers,  # Optional: pass for gardener to check
+)
 ```
+
+**What `process()` does each turn:**
+
+1. **Remove stale signals** — Drops `<harness:signal>` blocks older than `decay_check_interval` turns (prevents signal noise accumulation)
+2. **Deduplicate tool results** — Removes repeated consecutive tool calls with identical outputs
+3. **Compress if over threshold** — Drops oldest non-system messages until under `compression_threshold` tokens
+4. **Garden** — Runs `EntropyGardener.maybe_garden()` every `gardener_interval_turns` turns
 
 ### 9.3 Degradation detection
 
-The EntropyManager runs detection scans every `decay_check_interval` turns. It looks for:
-
-**Rule conflicts**: Two instructions in the context that contradict each other.
-
+**Stale signals** — Old harness feedback blocks accumulate and crowd out fresh context:
 ```
-Detected: Layer "base" says "Always use TypeScript"
-          Layer "project" says "This project uses JavaScript only"
-Resolution: Higher-priority layer (project, priority=10) takes precedence.
-            Lower-priority conflicting instruction removed.
+Before: [system, signal_turn_1, signal_turn_2, ..., signal_turn_15, user_msg]
+After:  [system, user_msg]  ← signals older than decay_check_interval removed
 ```
 
-**Temporal staleness**: Content that references outdated state.
-
+**Duplicate tool results** — Same tool called multiple times with identical output:
 ```
-Detected: Tool result from turn 3 references "current file: old_main.py"
-          But file was renamed to "main.py" in turn 15.
-Resolution: Stale tool result summarized or removed.
+Before: [tool:grep("foo")="line 5", tool:grep("foo")="line 5", tool:grep("foo")="line 5"]
+After:  [tool:grep("foo")="line 5"]
 ```
 
-**Repetition**: Duplicate or near-duplicate content accumulating in history.
-
+**Context overflow** — Total tokens exceed `compression_threshold`:
 ```
-Detected: The same error message "ModuleNotFoundError: No module named 'foo'"
-          appears in tool results at turns 5, 8, 12, and 15.
-Resolution: Keep most recent occurrence, summarize others as
-            "Same error repeated 3 times previously."
+Before: 8,500 tokens (system + 20 turns of history)
+After:  ~6,000 tokens (system + first user message + last N turns)
 ```
 
-**Low information density**: Large tool outputs that contain mostly noise.
-
-```
-Detected: Tool result from 'grep_search' is 4,000 tokens but only 200 tokens
-          are relevant to the current task.
-Resolution: Compress to relevant excerpts.
+**Conflict detection** — Heuristic scan for contradictory instructions:
+```python
+conflicts = manager.detect_conflicts(messages)
+# → ["Conflict: system messages disagree about: typescript"]
 ```
 
-### 9.4 Compression strategies
+### 9.4 EntropyGardener
 
-| Strategy | Behavior | Best for |
+The gardener is a background GC that runs every `gardener_interval_turns` turns and enforces mechanically verifiable invariants (golden rules).
+
+```python
+from harness0.entropy import EntropyGardener, GardenAction
+from harness0.core.config import EntropyConfig, GoldenRule
+
+gardener = EntropyGardener(
+    config=EntropyConfig(
+        gardener_enabled=True,
+        gardener_interval_turns=5,
+        staleness_threshold_hours=24,
+        golden_rules=[
+            GoldenRule(
+                id="no_duplicate_tools",
+                description="No two tools may share the same description",
+                severity="error",
+            ),
+            GoldenRule(
+                id="no_conflicting_instructions",
+                description="Detect contradictory directives across context layers",
+                severity="warning",
+            ),
+        ],
+    ),
+    translator=my_translator,     # Optional: auto-emits FeedbackSignals on violations
+    tool_registry=my_registry,    # Required for no_duplicate_tools check
+)
+
+# Force a full pass (used by EntropyManager internally)
+actions: list[GardenAction] = await gardener.garden(my_layers)
+
+# Or: run only if interval has elapsed
+actions = await gardener.maybe_garden(my_layers)
+```
+
+**GardenAction** — what the gardener returns:
+
+```python
+class GardenAction(BaseModel):
+    action_type: Literal["remove", "update", "flag"]
+    target: str             # Layer name or "tool_a,tool_b"
+    reason: str             # Human-readable description of the issue
+    severity: str           # "error" | "warning" | "info"
+    fix_instructions: str | None  # Agent-consumable repair steps
+    signal: FeedbackSignal | None # Pre-built signal (auto-added to translator)
+```
+
+**Built-in golden rule checks:**
+
+| Rule ID | What it checks | Requires |
 |---|---|---|
-| `targeted` | Detect specific issues (conflicts, staleness, repetition) and fix them surgically | Most situations — highest quality |
-| `summarize` | Use the LLM to summarize older messages into a condensed form | Simple long conversations |
-| `sliding_window` | Keep only the most recent N messages, discard the rest | Maximum simplicity, lowest cost |
+| `no_stale_layers` | FileSource layers older than `staleness_threshold_hours` | `context_layers` |
+| `no_duplicate_tools` | Two tools with identical descriptions | `tool_registry` |
+| `no_conflicting_instructions` | Contradictory directives across loaded layer content | `context_layers` |
 
 ### 9.5 Using standalone
 
 ```python
 from harness0.entropy import EntropyManager
+from harness0.core.config import EntropyConfig
+from harness0.feedback import FeedbackTranslator
+from harness0.core.config import FeedbackConfig
 
+translator = FeedbackTranslator(FeedbackConfig())
 manager = EntropyManager(
-    compression_threshold=6000,
-    detect_conflicts=True,
-    detect_staleness=True,
-    detect_repetition=True,
-    compression_strategy="targeted",
+    config=EntropyConfig(compression_threshold=6000),
+    translator=translator,
 )
 
-# messages: list of conversation messages (dicts with role/content)
-report = await manager.analyze(messages)
-print(f"Entropy score: {report.score}")      # 0-100, higher = more degraded
-print(f"Issues found: {len(report.issues)}")
-for issue in report.issues:
-    print(f"  - [{issue.type}] {issue.description}")
-
-cleaned_messages = await manager.process(messages)
+# In your own agent loop:
+messages, actions = await manager.process(messages=messages, turn_context=ctx)
 ```
 
 ---
 
 ## 10. The Agent Loop
 
-### 10.1 How the loop works
-
-The `AgentLoop` is the core execution cycle:
-
-```
-START
-  │
-  ▼
-┌─────────────────────────────────────────────────┐
-│ 1. L1 ContextAssembler.assemble()               │
-│    Load all layers, apply budgets, build prompt  │
-└──────────────────────┬──────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────┐
-│ 2. LLM Provider.chat()                          │
-│    Send messages + tool definitions to LLM      │
-└──────────────────────┬──────────────────────────┘
-                       │
-               ┌───────┴───────┐
-               │               │
-          Tool calls?     Final response?
-               │               │
-               ▼               ▼
-┌──────────────────────┐  ┌──────────────┐
-│ 3. For each tool call│  │ Return result│
-│    L2 → L3 → Execute │  │ END          │
-│    → L4 feedback      │  └──────────────┘
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────────────────────────────────┐
-│ 4. L5 EntropyManager.check()                     │
-│    If degradation detected: clean context         │
-└──────────────────────┬───────────────────────────┘
-           │
-           ▼
-┌──────────────────────────────────────────────────┐
-│ 5. Checkpoint state (if enabled)                  │
-└──────────────────────┬───────────────────────────┘
-           │
-           ▼
-       iteration < max_iterations?
-           │              │
-          Yes             No
-           │              │
-           ▼              ▼
-     Loop back to 1    Force stop, return partial result
-```
-
-### 10.2 AgentState
-
-The `AgentState` tracks everything about a running agent:
+### 10.1 engine.run()
 
 ```python
-class AgentState(BaseModel):
-    task: str                              # The original task
-    iteration: int                         # Current iteration count
-    messages: list[Message]                # Full conversation history
-    tool_history: list[ToolInteraction]    # All tool calls and results
-    feedback_signals: list[FeedbackSignal] # Accumulated feedback signals
-    metadata: dict                         # Arbitrary user metadata
-```
-
-### 10.3 Checkpointing and recovery
-
-When `checkpoint_enabled: true`, the agent state is saved to disk after each iteration:
-
-```python
-# State is automatically saved during engine.run()
-
-# To recover from a checkpoint:
 result = await engine.run(
-    "Continue the refactoring task",
-    resume_from="path/to/checkpoint.json",
+    task="Create a Python script that prints hello world",
+    llm_client=AsyncOpenAI(),     # Any OpenAI-compatible async client
+    max_iterations=50,             # Override config.max_iterations
 )
 ```
 
-This is valuable for long-running tasks where:
-- The process might crash
-- The user wants to pause and resume later
-- You want to inspect intermediate state
+**LLM client compatibility:**
+- `openai.AsyncOpenAI` — native support
+- Any object with `client.chat.completions.create(**kwargs)` interface
+- Any async callable `fn(messages=..., tools=...)` returning a dict
+
+### 10.2 RunResult
+
+```python
+result.output      # str — final LLM text response
+result.status      # "done" | "failed"
+result.error       # str | None — set if status is "failed"
+result.turn_count  # int — how many loop iterations ran
+result.signals     # list[SignalBundle] — all signals from all turns
+```
+
+### 10.3 AgentState
+
+The `AgentState` tracks everything about a running session:
+
+```python
+class AgentState(BaseModel):
+    session_id: str
+    task: str
+    turn_number: int
+    messages: list[Message]
+    tool_results: list[ToolResult]
+    status: Literal["running", "done", "failed", "waiting_approval"]
+    output: str | None
+    error: str | None
+    started_at: float
+    metadata: dict
+```
 
 ### 10.4 Stop conditions
 
-The loop stops when any of these conditions is met:
+The loop stops when:
+1. The LLM returns a final response with no tool calls (`finish_reason == "stop"`)
+2. `max_iterations` is reached → `status = "failed"`
+3. LLM client raises an unhandled exception
 
-1. The LLM returns a final response (no tool calls)
-2. `max_iterations` is reached
-3. An unrecoverable error occurs
-4. The user manually stops (in interactive mode)
-
-### 10.5 AgentResult
+### 10.5 Accessing the raw state
 
 ```python
-result = await engine.run("Create a hello world script")
+result._state            # AgentState — full internal state
+result._state.messages   # Full conversation history
+result._state.tool_results  # All tool calls and results
 
-result.output               # str — the final LLM response
-result.iterations           # int — how many loop iterations ran
-result.tool_calls           # list — all tool calls made
-result.feedback_signals     # list — all feedback signals generated
-result.state                # AgentState — full state (for inspection/recovery)
-result.token_usage          # TokenUsage — total tokens consumed
+# All signals grouped by turn
+for i, bundle in enumerate(result.signals):
+    print(f"Turn {i}: {len(bundle.signals)} signals")
+    for sig in bundle.signals:
+        print(f"  [{sig.type}] {sig.message}")
 ```
 
 ---
 
 ## 11. Using Individual Layers
 
-Every layer can be imported and used independently. This is the recommended approach when you already have an agent system and want to enhance specific capabilities.
+Every layer can be imported and used independently — no `HarnessEngine` required.
 
-### 11.1 L1 only: Better prompt management
+### 11.1 L1 only: Multi-layer prompt assembly
 
 ```python
-from harness0.context import ContextAssembler, ContextLayer, FileSource
+from harness0.context import (
+    ContextAssembler, ContextLayer, FileSource, InlineSource,
+    Freshness, DisclosureLevel,
+)
+from harness0.core.types import TurnContext
 
 assembler = ContextAssembler(
     layers=[
-        ContextLayer(name="system", priority=0, source=FileSource("system_prompt.md")),
-        ContextLayer(name="project", priority=10, source=FileSource("AGENTS.md")),
+        ContextLayer(
+            name="system",
+            source=FileSource("system_prompt.md"),
+            priority=0,
+            disclosure_level=DisclosureLevel.INDEX,
+        ),
+        ContextLayer(
+            name="project",
+            source=FileSource("AGENTS.md"),
+            priority=10,
+            freshness=Freshness.PER_SESSION,
+            disclosure_level=DisclosureLevel.INDEX,
+        ),
+        ContextLayer(
+            name="db-detail",
+            source=FileSource("docs/database.md"),
+            priority=20,
+            disclosure_level=DisclosureLevel.DETAIL,
+            keywords=["database", "sql", "query", "migration"],
+        ),
     ],
     total_token_budget=8000,
 )
 
-messages = await assembler.assemble(turn_context)
-# Use these messages with your own LLM call
+ctx = TurnContext(session_id="sess_1", turn_number=0, task="Fix the SQL migration")
+messages = await assembler.assemble(ctx)
+# Use `messages` with your own LLM call
 ```
 
 ### 11.2 L2 only: Governed tool execution
 
 ```python
-from harness0.tools import ToolRegistry, ToolInterceptor, ToolDefinition, RiskLevel
+from harness0.tools import ToolRegistry, ToolInterceptor, ToolDefinition, RiskLevel, ParameterSchema
+from harness0.feedback import FeedbackTranslator
+from harness0.core.config import ToolGovernanceConfig, FeedbackConfig
 
 registry = ToolRegistry()
-registry.register(
-    ToolDefinition(name="write_file", risk_level=RiskLevel.WRITE, ...),
+registry.register(ToolDefinition(
+    name="write_file",
+    description="Write content to a file.",
+    parameters=[
+        ParameterSchema(name="path", type="string", description="File path", required=True),
+        ParameterSchema(name="content", type="string", description="Content to write", required=True),
+    ],
+    risk_level=RiskLevel.WRITE,
     handler=my_write_file_function,
+))
+
+translator = FeedbackTranslator(FeedbackConfig())
+interceptor = ToolInterceptor(
+    registry=registry,
+    config=ToolGovernanceConfig(max_output_tokens=5000),
+    translator=translator,
 )
 
-interceptor = ToolInterceptor(registry, max_output_tokens=5000)
-
-# In your agent loop, instead of calling tools directly:
-result = await interceptor.execute(tool_call)
-# This validates, classifies risk, truncates output, and logs the audit trail.
+from harness0.core.types import ToolCall
+result = await interceptor.execute(ToolCall(name="write_file", arguments={"path": "out.txt", "content": "hello"}))
+print(result.output)
+print(result.error)     # None if successful
+print(result.truncated) # True if output was cut
 ```
 
-### 11.3 L3 only: Sandboxed command execution
+### 11.3 L3 only: Security enforcement
 
 ```python
-from harness0.security import ProcessSandbox, CommandGuard
+from harness0.security import CommandGuard, ProcessSandbox
+from harness0.core.config import SecurityConfig
 
-guard = CommandGuard(blocked_commands=["rm -rf", "sudo", "mkfs"])
-sandbox = ProcessSandbox(max_processes=5, max_output_bytes=100000, default_timeout=30)
+config = SecurityConfig(
+    blocked_commands=["rm -rf", "sudo", "mkfs"],
+    max_output_bytes=100_000,
+    default_timeout=30,
+)
+guard = CommandGuard(config)
+sandbox = ProcessSandbox(config)
 
+# Check before executing
 check = guard.check("ls -la /home/user")
-if check.blocked:
-    print(f"Blocked: {check.reason}")
+if check.allowed:
+    result = await sandbox.run(
+        command="ls -la /home/user",
+        tool_call_id="call_123",
+    )
+    print(result.output)
 else:
-    result = await sandbox.execute("ls -la /home/user")
-    print(result.stdout)
+    print("Blocked:", check.signal.message)
+    print("Fix:", check.signal.fix_instructions)
 ```
 
 ### 11.4 L4 only: Better error messages for models
 
 ```python
-from harness0.feedback import FeedbackTranslator, FeedbackSignal
+from harness0.feedback import FeedbackTranslator, FeedbackSignal, SignalType
+from harness0.core.config import FeedbackConfig
 
-translator = FeedbackTranslator()
+translator = FeedbackTranslator(FeedbackConfig())
 
 # When a tool fails in your system:
-signal = translator.translate_tool_error(
-    tool_name="run_command",
-    error=TimeoutError("Process exceeded 30s"),
-)
-# signal.message = "Command exceeded 30s timeout. Consider breaking into smaller steps."
-# signal.suggestion = "Try running a simpler command first, or increase the timeout."
+try:
+    result = run_command("npm install")
+except TimeoutError as exc:
+    signal = FeedbackTranslator.subprocess_timeout("npm install", timeout_seconds=30)
+    await translator.add(signal)
 
-# Inject this signal into your next LLM call as a system message
+# When the next LLM turn starts, flush signals and inject into context:
+bundle = await translator.flush()
+hint_text = translator.render_bundle(bundle)
+# Add hint_text as a system message before your LLM call
 ```
 
-### 11.5 L5 only: Context cleanup
+### 11.5 L5 only: Context quality maintenance
 
 ```python
-from harness0.entropy import EntropyManager
+from harness0.entropy import EntropyManager, EntropyGardener
+from harness0.core.config import EntropyConfig, GoldenRule
+from harness0.feedback import FeedbackTranslator
+from harness0.core.config import FeedbackConfig
+from harness0.core.types import TurnContext
 
+translator = FeedbackTranslator(FeedbackConfig())
 manager = EntropyManager(
-    compression_threshold=6000,
-    detect_conflicts=True,
-    compression_strategy="targeted",
+    config=EntropyConfig(
+        compression_threshold=6000,
+        detect_conflicts=True,
+        gardener_enabled=True,
+        gardener_interval_turns=5,
+        golden_rules=[
+            GoldenRule(id="no_duplicate_tools",
+                       description="No duplicate descriptions",
+                       severity="error"),
+        ],
+    ),
+    translator=translator,
 )
 
-# In your agent loop, periodically:
-if turn_number % 10 == 0:
-    cleaned_messages = await manager.process(messages)
+# In your agent loop each turn:
+messages, garden_actions = await manager.process(
+    messages=messages,
+    turn_context=TurnContext(session_id="x", turn_number=turn_n, task=task),
+    context_layers=my_layers,
+)
+
+# Inspect what the gardener flagged
+for action in garden_actions:
+    print(f"[{action.severity}] {action.target}: {action.reason}")
 ```
 
 ---
 
-## 12. Framework Integrations
+## 12. Framework Integrations [PLANNED]
 
-Integration adapters map harness0's 5 layers to each framework's extension points. Adapters are installed as optional extras and do not add core dependencies.
+Integration adapters map harness0's 5 layers to each framework's extension points. These are planned for a future release.
 
-### 12.1 LangChain
+### 12.1 LangChain [PLANNED]
 
-**Install**: `pip install harness0[langchain]`
+```python
+# Future API
+from harness0.integrations.langchain import HarnessMiddleware
 
-**How it works**: harness0 layers are wrapped as LangChain middleware, hooking into the `before_model`, `after_model`, and `wrap_tool_call` lifecycle points.
+agent = create_deep_agent(
+    model="gpt-4o",
+    middleware=[HarnessMiddleware.from_config("harness.yaml")],
+)
+```
 
-| harness0 Layer | LangChain Hook | What it does |
-|---|---|---|
-| L1 ContextAssembler | `before_model` | Assembles context before each LLM call |
-| L2 ToolInterceptor | `wrap_tool_call` | Wraps tool calls with validation, risk, audit |
-| L3 SecurityGuard | `wrap_tool_call` | Checks commands against blocklist before execution |
-| L4 FeedbackTranslator | `after_model` + `wrap_tool_call` | Collects events and injects feedback signals |
-| L5 EntropyManager | `before_model` | Detects and cleans context degradation |
+### 12.2 OpenAI Agents SDK [PLANNED]
 
-### 12.2 OpenAI Agents SDK
+```python
+# Future API
+from harness0.integrations.openai_sdk import HarnessInputGuardrail, HarnessToolGuardrail
 
-**Install**: `pip install harness0[openai]`
+agent = Agent(
+    name="coding-agent",
+    input_guardrails=[HarnessInputGuardrail(config)],
+    tool_guardrails=[HarnessToolGuardrail(config)],
+)
+```
 
-**How it works**: harness0 layers are wrapped as OpenAI guardrails (input guardrails and tool guardrails).
+### 12.3 PydanticAI [PLANNED]
 
-### 12.3 PydanticAI
+```python
+# Future API
+from harness0.integrations.pydantic_ai import HarnessDeps
 
-**Install**: `pip install harness0[pydantic-ai]`
+agent = Agent("openai:gpt-4o", deps_type=HarnessDeps)
+```
 
-**How it works**: harness0 is injected via PydanticAI's dependency injection system as a `deps_type`.
+### 12.4 CrewAI [PLANNED]
 
-### 12.4 CrewAI
+```python
+# Future API
+from harness0.integrations.crewai import harness_tool
 
-**Install**: `pip install harness0[crewai]`
-
-**How it works**: harness0 provides a `@harness_tool` decorator that wraps CrewAI tool functions with governance, security, and feedback translation.
-
-> Note: The exact adapter APIs will be finalized after the core layers are stable and each framework's extension points have been verified against their latest versions.
+@harness_tool(risk_level="execute", config=harness_config)
+def run_shell(command: str) -> str:
+    ...
+```
 
 ---
 
-## 13. Built-in Tool Plugins
+## 13. Built-in Tool Plugins [PLANNED]
 
-harness0 ships with a set of common tool plugins that are pre-configured with appropriate risk levels.
+A set of pre-built tools with correct risk levels is planned for a future release.
 
-### 13.1 File tools
+### 13.1 File tools [PLANNED]
 
 | Tool | Risk Level | Description |
 |---|---|---|
@@ -1169,204 +1411,314 @@ harness0 ships with a set of common tool plugins that are pre-configured with ap
 | `write_file` | WRITE | Write content to a file |
 | `list_directory` | READ | List files and directories |
 
-```python
-from harness0.plugins.builtin import file_tools
-
-engine.tools.register_plugin(file_tools)
-```
-
-### 13.2 Shell tools
+### 13.2 Shell tools [PLANNED]
 
 | Tool | Risk Level | Description |
 |---|---|---|
-| `run_command` | EXECUTE | Execute a shell command (goes through L3 SecurityGuard) |
+| `run_command` | EXECUTE | Execute a shell command through L3 SecurityGuard |
 
-```python
-from harness0.plugins.builtin import shell_tools
-
-engine.tools.register_plugin(shell_tools)
-```
-
-### 13.3 Search tools
+### 13.3 Search tools [PLANNED]
 
 | Tool | Risk Level | Description |
 |---|---|---|
 | `grep_search` | READ | Search file contents by regex pattern |
 | `glob_search` | READ | Find files by glob pattern |
 
-```python
-from harness0.plugins.builtin import search_tools
-
-engine.tools.register_plugin(search_tools)
-```
-
-### 13.4 Registering all built-in plugins
+Until these plugins are released, register your own tools using `@engine.tool`:
 
 ```python
-engine.tools.register_all_builtins()
-```
+import subprocess
+from pathlib import Path
 
-### 13.5 Writing custom plugins
+@engine.tool(risk_level=RiskLevel.READ)
+async def read_file(path: str) -> str:
+    """Read a file and return its contents."""
+    return Path(path).read_text()
 
-```python
-from harness0.plugins.base import ToolPlugin, ToolDefinition, RiskLevel
+@engine.tool(risk_level=RiskLevel.WRITE)
+async def write_file(path: str, content: str) -> str:
+    """Write content to a file."""
+    Path(path).write_text(content)
+    return f"Written {len(content)} chars to {path}"
 
-class DatabasePlugin(ToolPlugin):
-    name = "database"
+@engine.tool(risk_level=RiskLevel.READ)
+async def list_directory(path: str = ".") -> str:
+    """List files and directories at a path."""
+    return "\n".join(str(p) for p in Path(path).iterdir())
 
-    def get_tools(self) -> list[tuple[ToolDefinition, Callable]]:
-        return [
-            (
-                ToolDefinition(
-                    name="query_db",
-                    description="Execute a read-only SQL query",
-                    parameters={...},
-                    risk_level=RiskLevel.READ,
-                ),
-                self.query_db,
-            ),
-        ]
-
-    async def query_db(self, sql: str) -> str:
-        ...
-
-engine.tools.register_plugin(DatabasePlugin())
+@engine.tool(risk_level=RiskLevel.EXECUTE, requires_approval=True, timeout=60)
+async def run_command(command: str) -> str:
+    """Execute a shell command."""
+    result = subprocess.run(command, shell=True, capture_output=True, text=True)
+    return result.stdout + result.stderr
 ```
 
 ---
 
 ## 14. LLM Providers
 
-### 14.1 Supported providers
-
-| Provider | Config value | Requirements |
-|---|---|---|
-| OpenAI | `provider: openai` | `OPENAI_API_KEY` env var or `api_key` in config |
-| Anthropic | `provider: anthropic` | `ANTHROPIC_API_KEY` env var or `api_key` in config |
-
-### 14.2 OpenAI-compatible endpoints
-
-Any API that implements the OpenAI chat completions interface can be used:
-
-```yaml
-llm:
-  provider: openai
-  model: deepseek-chat
-  base_url: https://api.deepseek.com/v1
-  api_key: ${DEEPSEEK_API_KEY}
-```
-
-This works with DeepSeek, Together AI, Ollama (with OpenAI-compatible mode), vLLM, and others.
-
-### 14.3 Custom LLM provider
+### 14.1 OpenAI (default)
 
 ```python
-from harness0.llm.base import LLMProvider, Message, LLMResponse
+from openai import AsyncOpenAI
 
-class MyCustomProvider(LLMProvider):
-    async def chat(
-        self,
-        messages: list[Message],
-        tools: list[dict] | None = None,
-    ) -> LLMResponse:
-        # Call your LLM API
+client = AsyncOpenAI(api_key="sk-...")  # or set OPENAI_API_KEY env var
+result = await engine.run("Your task", llm_client=client)
+```
+
+### 14.2 Anthropic [PLANNED]
+
+Direct Anthropic support via `llm/anthropic.py` is planned. Until then, use Anthropic's OpenAI-compatible endpoint if available, or implement a thin wrapper:
+
+```python
+import anthropic
+
+class AnthropicAdapter:
+    def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20241022"):
+        self.client = anthropic.AsyncAnthropic(api_key=api_key)
+        self.model = model
+
+    async def __call__(self, messages: list, tools: list) -> dict:
+        # Adapt Anthropic API response to harness0 format
         ...
+```
 
-    async def count_tokens(self, text: str) -> int:
-        # Return token count for the text
-        ...
+### 14.3 OpenAI-compatible endpoints
 
-engine = HarnessEngine(config=config, llm_provider=MyCustomProvider())
+Any API implementing the OpenAI chat completions interface works out of the box:
+
+```python
+from openai import AsyncOpenAI
+
+# DeepSeek
+client = AsyncOpenAI(
+    api_key="your-deepseek-key",
+    base_url="https://api.deepseek.com/v1",
+)
+
+# Ollama (local)
+client = AsyncOpenAI(
+    api_key="ollama",
+    base_url="http://localhost:11434/v1",
+)
+
+# Together AI
+client = AsyncOpenAI(
+    api_key="your-together-key",
+    base_url="https://api.together.xyz/v1",
+)
+
+result = await engine.run("Your task", llm_client=client)
+```
+
+### 14.4 Custom LLM adapter
+
+Implement any async callable that accepts `messages` and `tools` and returns a dict:
+
+```python
+async def my_llm_client(messages: list[dict], tools: list[dict]) -> dict:
+    # Call your LLM
+    response = await my_api.call(messages=messages, tools=tools)
+    return {
+        "content": response.text,
+        "finish_reason": "stop" if response.done else "tool_calls",
+        "tool_calls": [
+            {
+                "id": tc.id,
+                "function": {"name": tc.name, "arguments": tc.arguments},
+            }
+            for tc in response.tool_calls
+        ],
+    }
+
+result = await engine.run("Your task", llm_client=my_llm_client)
 ```
 
 ---
 
 ## 15. Advanced Topics
 
-### 15.1 Environment variable expansion in YAML
-
-Configuration values support `${ENV_VAR}` syntax:
-
-```yaml
-llm:
-  api_key: ${OPENAI_API_KEY}
-  base_url: ${LLM_BASE_URL}
-```
-
-If the environment variable is not set, an error is raised at config load time.
-
-### 15.2 Multiple config files
-
-You can split configuration across files and merge them:
+### 15.1 Dynamic context layers at runtime
 
 ```python
-engine = HarnessEngine.from_configs(
-    "harness.yaml",           # Base config
-    "harness.local.yaml",     # Local overrides (gitignored)
+from harness0.context import ContextLayer, InlineSource, DisclosureLevel
+
+engine = HarnessEngine.default()
+
+# Add context at runtime (e.g. based on user session)
+user_context = ContextLayer(
+    name="user-profile",
+    source=InlineSource(f"User: {user.name}. Preferences: {user.prefs}"),
+    priority=30,
+    freshness=Freshness.PER_TURN,
+    disclosure_level=DisclosureLevel.INDEX,
+)
+engine.add_context_layer(user_context)
+
+# Remove a layer
+engine.assembler.remove_layer("user-profile")
+```
+
+### 15.2 Custom golden rules
+
+```python
+from harness0.core.config import GoldenRule, EntropyConfig, HarnessConfig
+
+config = HarnessConfig(
+    entropy=EntropyConfig(
+        golden_rules=[
+            GoldenRule(
+                id="no_stale_layers",
+                description="All FileSource layers must be newer than 24h",
+                severity="warning",
+            ),
+            GoldenRule(
+                id="no_duplicate_tools",
+                description="No two tools may share the same description",
+                severity="error",
+            ),
+            GoldenRule(
+                id="no_conflicting_instructions",
+                description="Detect contradictory directives across context layers",
+                severity="warning",
+            ),
+        ],
+    ),
 )
 ```
 
-Later files override earlier files. This allows team-shared base configs with per-developer overrides.
-
-### 15.3 Observing the agent loop
-
-You can attach observers to monitor the agent loop in real time:
+### 15.3 Custom approval backend
 
 ```python
-from harness0.core.loop import LoopObserver
+from harness0.security import ApprovalBackend, ApprovalManager
 
-class MyObserver(LoopObserver):
-    async def on_iteration_start(self, state: AgentState):
-        print(f"--- Iteration {state.iteration} ---")
+class WebhookApprovalBackend(ApprovalBackend):
+    async def request(self, action: str, context: str) -> bool:
+        response = await httpx.post(
+            "https://my-approval-service.com/approve",
+            json={"action": action, "context": context},
+        )
+        return response.json()["approved"]
 
-    async def on_tool_call(self, tool_name: str, params: dict):
-        print(f"Calling tool: {tool_name}")
-
-    async def on_feedback(self, signal: FeedbackSignal):
-        print(f"Feedback: [{signal.type}] {signal.message}")
-
-engine.loop.add_observer(MyObserver())
+engine.approval_manager = ApprovalManager(
+    config=engine.config.security,
+    backend=WebhookApprovalBackend(),
+)
 ```
 
-### 15.4 Token usage tracking
+### 15.4 Multi-format signal rendering
 
 ```python
-result = await engine.run("Refactor the codebase")
+# harness.yaml: feedback.signal_format controls the default
 
-print(f"Input tokens:  {result.token_usage.input_tokens}")
-print(f"Output tokens: {result.token_usage.output_tokens}")
-print(f"Total tokens:  {result.token_usage.total_tokens}")
-print(f"LLM calls:     {result.token_usage.llm_calls}")
+# Override per-bundle at runtime:
+bundle = await translator.flush()
+xml_hint = bundle.render("xml")       # <harness:signals>...</harness:signals>
+md_hint = bundle.render("markdown")   # ❌ **[source]** message...
+json_hint = bundle.render("json")     # {"harness_signal": {...}}
+```
+
+### 15.5 Running without an LLM (testing)
+
+```python
+engine = HarnessEngine.default()
+
+# execute_tool works without an LLM client
+result = await engine.execute_tool("read_file", path="README.md")
+
+# engine.run() without llm_client returns a stub result immediately
+result = await engine.run("some task")
+print(result.output)  # "(No LLM client configured. Task: some task)"
+```
+
+### 15.6 Extending the interception pipeline
+
+You can access the raw interceptor to add pre/post hooks:
+
+```python
+from harness0.tools.interceptor import ToolInterceptor
+
+# Override registry methods for debugging
+original_execute = engine.interceptor.execute
+
+async def traced_execute(call):
+    print(f"→ Calling tool: {call.name} with {call.arguments}")
+    result = await original_execute(call)
+    print(f"← Result: {result.output[:100]}")
+    return result
+
+engine.interceptor.execute = traced_execute
 ```
 
 ---
 
 ## 16. Troubleshooting
 
-### Common issues
+### 16.1 Tool not found
 
-**"Config validation error: field X is required"**
+```
+FeedbackSignal [error] tools.interceptor:
+  Tool `my_tool` is not registered.
+  Available tools: read_file, write_file.
+```
 
-Your `harness.yaml` is missing a required field. Check the [Configuration Reference](#4-configuration-reference) for required fields. At minimum, you need `llm.provider` and `llm.model`.
+**Cause**: The `@engine.tool` decorator was not applied, or the function was defined after `engine.run()` was called.
 
-**"No tools registered"**
+**Fix**: Register all tools before calling `engine.run()`. The decorator registers immediately when applied.
 
-You must register at least one tool before calling `engine.run()`. Use `@engine.tool()` decorator or `engine.tools.register_plugin()`.
+### 16.2 Schema validation failure
 
-**"Context budget exceeded — layers truncated"**
+```
+FeedbackSignal [error] tools.interceptor.write_file:
+  Tool call `write_file` failed schema validation: Missing required parameter: `content`
+```
 
-Your `total_token_budget` is too small for all your layers. Either increase the budget or add `max_tokens` limits to lower-priority layers so they are truncated gracefully.
+**Cause**: The LLM omitted a required argument.
 
-**"Approval timeout"**
+**Fix**: Improve the tool's description to make the required parameters obvious. The `fix_instructions` in the signal will guide the agent to retry with correct arguments.
 
-In `approval_mode: risky_only` or `always`, the agent blocks waiting for human approval. If running non-interactively, either set `approval_mode: never` or provide a custom approval backend.
+### 16.3 Command blocked
 
-**"Command blocked by security policy"**
+```
+FeedbackSignal [constraint] security.command_guard:
+  Command blocked: `sudo apt install nginx` matches blocked pattern `sudo`.
+```
 
-A tool tried to execute a command matching your `blocked_commands` list. This is working as intended. The model will receive a FeedbackSignal explaining why. If the command should be allowed, update your `blocked_commands` list.
+**Fix**: The agent receives `fix_instructions` and will adjust on the next turn. If the operation is genuinely necessary, add it to an allow-list or switch `approval_mode` to `always` and let the user approve it.
 
-### Getting help
+### 16.4 Output truncated
 
-- **GitHub Issues**: Report bugs and request features
-- **GitHub Discussions**: Ask questions and share usage patterns
-- **Documentation**: See [architecture.md](architecture.md) for technical details
+```
+FeedbackSignal [warning] tools.interceptor.grep_search:
+  Tool output was truncated from ~12000 to 5000 tokens.
+```
+
+**Fix**: The agent receives `fix_instructions` to narrow its search scope. You can also increase `tools.max_output_tokens` in config.
+
+### 16.5 Subprocess timeout
+
+```
+FeedbackSignal [error] security.sandbox:
+  Command `npm install` exceeded the 30s timeout.
+```
+
+**Fix**: Increase `security.default_timeout` in config, or break the task into smaller commands. The agent receives `fix_instructions` guiding it to do this.
+
+### 16.6 Context layer not loading
+
+**Symptom**: System prompt is empty or missing expected content.
+
+**Checklist**:
+1. Is `disclosure_level` set to `"index"`? DETAIL layers are skipped unless the task matches a keyword.
+2. Does the source file actually exist? `FileSource` raises `FileNotFoundError` on load — check the engine log for warnings.
+3. Is the layer's token budget being exceeded? Check `total_token_budget` and per-layer `max_tokens`.
+
+### 16.7 EntropyGardener not running
+
+**Symptom**: No `GardenAction` objects returned.
+
+**Checklist**:
+1. `entropy.gardener_enabled` must be `True`
+2. Gardener runs only every `gardener_interval_turns` turns — check `turn_count`
+3. Golden rules are only checked if `golden_rules` is non-empty in config
+4. `no_duplicate_tools` requires `tool_registry` to be passed to `EntropyGardener`

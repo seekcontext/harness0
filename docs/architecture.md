@@ -133,16 +133,25 @@ The core insight: prompts are not documents, they are assembly systems.
 **Key types:**
 
 ```python
+class DisclosureLevel(str, Enum):
+    INDEX = "index"    # Always injected — brief, pointer-based, < 200 tokens
+    DETAIL = "detail"  # Loaded selectively based on task relevance
+
 class ContextLayer(BaseModel):
-    name: str                    # e.g. "base", "soul", "agents", "skills"
-    priority: int                # Higher = loaded later = higher override
-    source: ContextSource        # File, directory, callable, or inline
-    freshness: Freshness         # static / per_session / per_turn
-    max_tokens: int | None       # Per-layer token budget
+    name: str                              # e.g. "base", "soul", "agents", "skills"
+    priority: int                          # Higher = loaded later = higher override
+    source: ContextSource                  # File, directory, callable, or inline
+    freshness: Freshness                   # static / per_session / per_turn
+    max_tokens: int | None                 # Per-layer token budget
+    disclosure_level: DisclosureLevel      # Index (always) vs Detail (selective)
 
 class ContextAssembler:
     async def assemble(self, turn_context: TurnContext) -> list[Message]:
-        """Load all layers → sort by priority → apply token budgets → return messages."""
+        """
+        1. Load all INDEX layers unconditionally.
+        2. Load DETAIL layers only when task keywords match.
+        3. Sort by priority → apply token budgets → return messages.
+        """
 ```
 
 **Source types:**
@@ -155,6 +164,15 @@ class ContextAssembler:
 - `static` — Load once at initialization
 - `per_session` — Reload at session start
 - `per_turn` — Reload every turn (for dynamic state)
+
+**Progressive disclosure flow:**
+```
+Turn N arrives
+  → All INDEX layers always injected (AGENTS.md index, system rules summary)
+  → DETAIL layers checked: does task mention "security"? → inject security.md
+  → Token budget applied across all selected layers
+  → Messages assembled by priority order
+```
 
 ### L2: Tool Governance
 
@@ -222,12 +240,18 @@ The core insight: translate system events into model-consumable feedback languag
 
 ```python
 class FeedbackSignal(BaseModel):
-    type: SignalType      # "error" | "warning" | "info" | "constraint"
-    source: str           # Which subsystem generated this
-    message: str          # Human/model-readable explanation
-    actionable: bool      # Can the model do something about it?
-    suggestion: str | None  # Recommended next step
+    type: SignalType           # "error" | "warning" | "info" | "constraint"
+    source: str                # Which subsystem generated this
+    message: str               # Human/model-readable explanation
+    actionable: bool           # Can the model do something about it?
+    suggestion: str | None     # Recommended next step (brief)
+    fix_instructions: str | None  # Step-by-step agent-consumable repair guidance
+    
+    def to_xml_hint(self) -> str:
+        """Render as XML-tagged hint for injection into agent context."""
 ```
+
+The `fix_instructions` field is the key difference from a simple error message. It contains complete, actionable steps the agent can execute immediately — modeled on OpenAI's linter error messages that embed fix guidance directly into agent context.
 
 **Translation examples:**
 
@@ -261,6 +285,51 @@ The core insight: agent systems decay over time. Active maintenance is required.
    - Remove expired rules rather than compressing them
    - Resolve conflicts by prioritizing newer/higher-priority sources
    - Replace verbose content with structured summaries
+
+4. **EntropyGardener** (NEW — proactive background GC):
+
+```python
+class GardenAction(BaseModel):
+    action_type: Literal["remove", "update", "flag"]
+    target: str            # Layer name or content identifier
+    reason: str            # Human-readable explanation
+    fix_instructions: str | None  # What to do to fix it
+
+class EntropyGardener:
+    """
+    Background GC for context quality. Runs every N turns proactively.
+    Inspired by OpenAI's doc-gardening agent pattern.
+    
+    Checks golden rules declared in harness.yaml:
+      entropy:
+        golden_rules:
+          - id: no_stale_layers
+            description: "All FileSource layers must be fresher than staleness_threshold_hours"
+            severity: warning
+          - id: no_duplicate_tools
+            description: "No two registered tools may have identical descriptions"
+            severity: error
+    """
+    async def maybe_garden(self, context: list[ContextLayer]) -> list[GardenAction]: ...
+    async def garden(self, context: list[ContextLayer]) -> list[GardenAction]: ...
+```
+
+**GoldenRule config** in `harness.yaml`:
+```yaml
+entropy:
+  gardener_enabled: true
+  gardener_interval_turns: 5
+  golden_rules:
+    - id: no_stale_layers
+      description: "All FileSource layers must be newer than staleness_threshold_hours"
+      severity: warning
+    - id: no_duplicate_tools
+      description: "No two tools may share the same description"
+      severity: error
+    - id: no_conflicting_instructions
+      description: "Detect contradictory rules across context layers"
+      severity: error
+```
 
 **Difference from LangChain Summarization:**
 
@@ -386,10 +455,65 @@ entropy:
   decay_check_interval: 10
   detect_conflicts: true
   staleness_threshold_hours: 24
+  gardener_enabled: true
+  gardener_interval_turns: 5
+  golden_rules:
+    - id: no_stale_layers
+      description: "All FileSource layers must be newer than staleness_threshold_hours"
+      severity: warning
+    - id: no_duplicate_tools
+      description: "No two tools may share the same description"
+      severity: error
 
 max_iterations: 50
 checkpoint_enabled: true
 ```
+
+## Design Principles (Informed by OpenAI Harness Engineering)
+
+These principles are derived from OpenAI's production experience building a 1M-LOC fully agent-generated codebase. They shape every layer of harness0.
+
+### 1. Progressive Disclosure (L1)
+
+> "Give Codex a map, not a 1,000-page manual."
+
+Context is a scarce resource. Injecting everything upfront crowds out the task itself. Instead:
+
+- **Index layers** (`disclosure_level: "index"`) are always injected — brief, < 200 tokens, pointer-based.
+- **Detail layers** (`disclosure_level: "detail"`) are loaded selectively when task relevance is detected.
+
+This maps to the `DisclosureLevel` enum on `ContextLayer` and controls the assembly strategy in `ContextAssembler`.
+
+### 2. Agent-Readable Error Messages (L3 → L4)
+
+> "We write error messages with fix instructions injected into agent context."
+
+Raw errors are useless to models. Every rejection, timeout, or constraint violation must be translated into an **actionable, structured signal** that the agent can reason about and act on directly.
+
+`FeedbackSignal` carries a `fix_instructions` field — step-by-step repair guidance formatted for agent consumption, not human reading. `CommandGuard` and all L3 components produce `FeedbackSignal` directly rather than raising bare exceptions.
+
+### 3. Active Entropy Gardening (L5)
+
+> "We started encoding golden principles directly into the repo and built a continuous cleanup loop."
+> "Technical debt is like a high-interest loan: pay it down in small amounts continuously."
+
+Passive cleanup (triggered only when token budget is exceeded) is insufficient. harness0 introduces `EntropyGardener` — a background GC process that runs every N turns:
+
+- Scans for staleness, conflicts, and pattern drift
+- Applies **golden rules** (mechanically verifiable invariants declared in `harness.yaml`)
+- Produces targeted `GardenAction` fixes rather than blunt compression
+
+### 4. Agent-Readable Design (Cross-Cutting)
+
+> "Anything the agent cannot access in context at runtime does not exist."
+
+All harness0 outputs — config, error messages, audit logs, feedback signals — are designed as **agent-consumable artifacts** first. This means:
+
+- Structured, not prose: every output has a predictable schema
+- Self-describing: includes `source`, `type`, and `fix_instructions` fields
+- Version-controlled: `harness.yaml` config is the single source of truth, readable by both humans and agents
+
+---
 
 ## Tech Stack
 

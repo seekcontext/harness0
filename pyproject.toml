@@ -4,13 +4,20 @@ build-backend = "hatchling.build"
 
 [project]
 name = "harness0"
-version = "0.0.2"
+version = "0.0.3"
 description = "Layer 0 of agent reliability — the framework-agnostic harness that makes any AI agent stable."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
     { name = "seekcontext" },
+]
+dependencies = [
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "tiktoken>=0.7",
+    "httpx>=0.27",
+    "aiofiles>=24.0",
 ]
 keywords = [
     "agent",
