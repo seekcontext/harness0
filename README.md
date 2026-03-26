@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Not another agent framework.<br>A reliability layer that makes any agent stable.</strong>
+  <strong>Harness Engine for AI Agents.<br>A reliability layer that makes any agent stable.</strong>
 </p>
 
 <p align="center">
@@ -35,7 +35,7 @@ You provide the Model. **harness0** provides the Harness — the engineering inf
 │  Orchestration (pick one)               │
 │  LangChain / CrewAI / PydanticAI / DIY  │
 ├─────────────────────────────────────────┤
-│  ★ harness0 — reliability layer        │  ← Layer 0
+│  ★ harness0 — reliability layer         │  ← Layer 0
 │  Context · Tools · Security             │
 │  Feedback · Entropy                     │
 ├─────────────────────────────────────────┤
