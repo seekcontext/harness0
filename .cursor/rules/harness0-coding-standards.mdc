@@ -1,0 +1,30 @@
+---
+description: harness0 Python coding standards and conventions
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# harness0 Coding Standards
+
+## Package & Import
+
+- Package name: `harness0` (import as `from harness0.context import ContextAssembler`)
+- Use `src/harness0/` layout (PEP 621 + hatchling)
+- Each layer lives in its own subpackage under `src/harness0/`
+
+## Naming Conventions
+
+- Classes: `HarnessEngine`, `ContextAssembler`, `ToolInterceptor`, `SecurityGuard`, `FeedbackTranslator`, `EntropyManager`
+- Integration classes: `HarnessMiddleware` (LangChain), `HarnessInputGuardrail` (OpenAI SDK), `HarnessDeps` (PydanticAI), `harness_tool` (CrewAI decorator)
+- Config models: `HarnessConfig`, `ContextConfig`, `ToolGovernanceConfig`, `SecurityConfig`, `FeedbackConfig`, `LLMConfig`
+- Risk levels: `RiskLevel.READ`, `RiskLevel.WRITE`, `RiskLevel.EXECUTE`, `RiskLevel.CRITICAL`
+- Freshness policies: `"static"`, `"per_session"`, `"per_turn"`
+
+## Style
+
+- Python 3.11+ (use modern syntax: `X | Y` unions, `match/case` where appropriate)
+- All public APIs must be async (`async def`)
+- Use Pydantic v2 `BaseModel` for all data models and config
+- Type hints on all public functions
+- ruff for formatting and linting (line-length=100)
+- Comments and docstrings in English

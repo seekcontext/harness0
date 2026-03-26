@@ -1,0 +1,93 @@
+---
+description: harness0 project context — identity, architecture, tech decisions, and current state
+alwaysApply: true
+---
+
+# harness0 — Project Context
+
+## Identity
+
+- **Name**: harness0 (PyPI: `harness0`, GitHub: `seekcontext/harness0`)
+- **Tagline**: Layer 0 of Agent Reliability
+- **Core formula**: `Agent = Loop(Model + Harness)` — you provide the Model, harness0 provides the Harness.
+- **Positioning**: NOT another agent framework. A framework-agnostic **reliability layer** that works WITH orchestration frameworks (LangChain, CrewAI, PydanticAI, OpenAI Agents SDK), not against them.
+- **The "0"**: Layer 0 = foundational layer beneath all frameworks; Ground Zero = where reliability begins.
+- **License**: MIT
+- **Status**: Pre-Alpha (v0.0.2 on PyPI, placeholder package only)
+
+## 5-Layer Architecture
+
+```
+HarnessEngine (facade)
+    ├── L1 ContextAssembler    — dynamic layered prompt assembly (priority, freshness, token budget)
+    ├── L2 ToolInterceptor     — tool registry, risk classification, validation, audit
+    ├── L3 SecurityGuard       — subprocess sandbox, command blocklist, approval workflows
+    ├── L4 FeedbackTranslator  — translate system events into model-consumable signals
+    └── L5 EntropyManager      — detect/repair context degradation (staleness, conflicts, repetition)
+```
+
+Each layer is independently importable and usable standalone.
+
+## Tech Stack
+
+- Python 3.11+, asyncio
+- Pydantic v2 for models and config validation
+- `harness.yaml` as declarative config center
+- hatchling as build backend
+- pytest + pytest-asyncio for testing, ruff for linting
+
+## Project Structure (Target)
+
+```
+src/harness0/
+    __init__.py          # package entry, __version__
+    engine.py            # HarnessEngine facade
+    core/                # shared types: HarnessConfig, BaseModel, events
+    context/             # L1: ContextAssembler, ContextLayer, sources, token budget
+    tools/               # L2: ToolInterceptor, ToolDefinition, risk levels, audit
+    security/            # L3: SecurityGuard, ProcessSandbox, CommandGuard, ApprovalManager
+    feedback/            # L4: FeedbackTranslator, FeedbackSignal
+    entropy/             # L5: EntropyManager, degradation detectors, strategies
+    llm/                 # LLM provider abstraction (OpenAI, Anthropic, compatible)
+    integrations/        # Framework adapters (langchain, openai_sdk, pydantic_ai, crewai)
+    plugins/             # Built-in tool plugins (filesystem, shell, http)
+examples/
+tests/
+docs/                    # project-vision, architecture, competitive-analysis, growth-strategy, USER_MANUAL
+```
+
+## Key Design Principles
+
+1. **Composition over inheritance** — every layer is an independent module
+2. **Declarative over imperative** — config via `harness.yaml`, not buried in code
+3. **Zero magic** — all interception/injection/truncation is explicit and observable
+4. **Model agnostic** — LLM provider is a plugin, core depends on no specific model
+5. **Progressive adoption** — use L1+L2 alone, or all 5 layers for production
+
+## Existing Documentation
+
+- `README.md` — public-facing overview, design preview, 5-layer model
+- `docs/project-vision.md` — vision, positioning, value proposition, target audience
+- `docs/architecture.md` — detailed technical architecture, integration patterns, code sketches
+- `docs/competitive-analysis.md` — landscape analysis vs LangChain, Microsoft AGT, OpenAI SDK, PydanticAI, CrewAI
+- `docs/growth-strategy.md` — multi-phase adoption plan, naming narrative, HarnessScore concept
+- `docs/USER_MANUAL.md` — comprehensive planned API reference (1370+ lines)
+
+## Competitive Differentiators
+
+Three capabilities not addressed by major frameworks:
+1. **Multi-layer context assembly** (L1) — beyond flat prompts
+2. **Feedback translation** (L4) — system errors → model-consumable signals
+3. **Entropy management** (L5) — active context quality maintenance
+
+## Current State & Next Steps
+
+- GitHub repo and PyPI package are live (placeholder, no functional code yet)
+- All design docs are complete
+- **Next**: Implement the actual Python code, starting with core types, then L1→L2→L3→L4→L5, then HarnessEngine facade
+- Refer to `docs/architecture.md` for detailed type definitions and `docs/USER_MANUAL.md` for planned API surface
+
+## Concept Origin
+
+Harness Engineering was first introduced by Ryan Lopopolo (OpenAI) in Feb 2026:
+https://openai.com/index/harness-engineering/
